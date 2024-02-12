@@ -29,6 +29,8 @@ namespace bitsery {
 	}
 }
 
+AE_NAMESPACE_BEGIN
+
 /**
  * MessageBuffer is a simple dynamic array where elements cannot be removed, only added.
  * 
@@ -48,7 +50,7 @@ public:
 
 	// data must be a pointer allocated to on the heap
 	// Note: MessageBuffer will MOT assume ownership over the data
-	MessageBuffer(u32 size, u8* data)
+	MessageBuffer(size_t size, u8* data)
 		: capacity(size), size(size), data(data), hasOwnership(false) {
 	}
 
@@ -65,7 +67,7 @@ public:
 		}
 	}
 
-	u32 getSize() const { return size; }
+	size_t getSize() const { return size; }
 	const u8* getData() const { return data; }
 	u8* getData() { return data; }
 	bool isOwner() const { return hasOwnership; }
@@ -75,16 +77,16 @@ public:
 		hasOwnership = isOwner;
 	}
 
-	void setData(u32 size, u8* data, bool hasOwnership = true) {
+	void setData(size_t size, u8* data, bool hasOwnership = true) {
 		this->capacity = size;
 		this->size = size;
 		this->data = data;
 		this->hasOwnership = hasOwnership;
 	}
 
-	void resize(u32 newSize) {
+	void resize(size_t newSize) {
 		if (!hasOwnership)
-			engineLog(ERROR_SEVERITY_FATAL, "Attempt to resize a MessageBuffer that isn't an owner\n");
+			log(ERROR_SEVERITY_FATAL, "Attempt to resize a MessageBuffer that isn't an owner\n");
 
 		if (allocateIfNoData(newSize)) {
 			size = newSize;
@@ -107,7 +109,7 @@ public:
 		}
 	}
 
-	void addSize(u32 additionalSize) {
+	void addSize(size_t additionalSize) {
 		resize(size + additionalSize);
 	}
 
@@ -122,16 +124,16 @@ public:
 
 	void clear() {
 		if (!hasOwnership)
-			engineLog(ERROR_SEVERITY_FATAL, "Attempt to clear a MessageBuffer that isn't an owner\n");
+			log(ERROR_SEVERITY_FATAL, "Attempt to clear a MessageBuffer that isn't an owner\n");
 		size = 0;
 	}
 
-	u8& operator[](u32 index) {
+	u8& operator[](size_t index) {
 		if (index > size - 1) {
-			engineLog(ERROR_SEVERITY_FATAL, "MessageBuffer: Index out of bounds\n");
+			log(ERROR_SEVERITY_FATAL, "MessageBuffer: Index out of bounds\n");
 		}
 		if (!data) {
-			engineLog(ERROR_SEVERITY_FATAL, "MessageBuffer: No data allocated\n");
+			log(ERROR_SEVERITY_FATAL, "MessageBuffer: No data allocated\n");
 		}
 
 		return data[index];
@@ -147,7 +149,7 @@ protected:
 	// Will allocate if data is nullptr
 	//	size: the new capacity
 	// note: this->size will be set to zero
-	bool allocateIfNoData(u32 size) {
+	bool allocateIfNoData(size_t size) {
 		if (data)
 			return false;
 
@@ -159,19 +161,21 @@ protected:
 	}
 
 private:
-	u32 capacity; // Optimizations for capacity not yet added
-	u32 size;
+	size_t capacity; // Optimizations for capacity not yet added
+	size_t size;
 	u8* data;
 	bool hasOwnership;
 };
 
 typedef MessageBuffer OutputBuffer;
-typedef bitsery::OutputBufferAdapter<OutputBuffer> OutputAdapter;
-typedef bitsery::Serializer<OutputAdapter> Serializer;
+typedef ::bitsery::OutputBufferAdapter<OutputBuffer> OutputAdapter;
+typedef ::bitsery::Serializer<OutputAdapter> Serializer;
 
 typedef MessageBuffer InputBuffer;
-typedef bitsery::InputBufferAdapter<InputBuffer> InputAdapter;
-typedef bitsery::Deserializer<InputAdapter> Deserializer;
+typedef ::bitsery::InputBufferAdapter<InputBuffer> InputAdapter;
+typedef ::bitsery::Deserializer<InputAdapter> Deserializer;
+
+AE_NAMESPACE_END
 
 namespace bitsery {
 	namespace traits {
@@ -199,34 +203,36 @@ namespace bitsery {
 		//};
 
 		template<>
-		struct BufferAdapterTraits<MessageBuffer> {
+		struct BufferAdapterTraits<::ae::MessageBuffer> {
 			using TIterator = uint8_t*;
 			using TConstIterator = const uint8_t*;
 			using TValue = uint8_t;
 
-			static void increaseBufferSize(OutputBuffer& buffer, size_t currOffset, size_t newOffset) {
+			static void increaseBufferSize(::ae::MessageBuffer& buffer, size_t currOffset, size_t newOffset) {
 				buffer.addSize((u32)newOffset - (u32)currOffset);
 			}
 		};
 
-		template<>
-		struct ContainerTraits<MessageBuffer> {
+		template<> 
+		struct ContainerTraits<::ae::MessageBuffer> {
 			using TValue = uint8_t;
 
 			static constexpr bool isResizable = true;
 			static constexpr bool isContiguous = true;
 
-			static void resize(OutputBuffer& buffer, size_t newSize) {
+			static void resize(::ae::MessageBuffer& buffer, size_t newSize) {
 				buffer.resize(newSize);
 			}
 
 			// get container size
-			static size_t size(const OutputBuffer& buf) {
+			static size_t size(const ::ae::MessageBuffer& buf) {
 				return buf.getSize();
 			}
 		};
 	}
 }
+
+AE_NAMESPACE_BEGIN
 
 inline Serializer startSerialize(OutputBuffer& buffer) {
 	Serializer ser(buffer);
@@ -341,7 +347,7 @@ public:
 	NetworkManager() {
 		pollGroup = impl::getSockets()->CreatePollGroup();
 		if(pollGroup == k_ESteamNetConnectionEnd_Invalid)
-			engineLog(ERROR_SEVERITY_FATAL, "Unable to create poll group?\n");
+			log(ERROR_SEVERITY_FATAL, "Unable to create poll group?\n");
 	}
 
 	~NetworkManager() {
@@ -439,7 +445,7 @@ public:
 			networkingMessages.clear();
 		} else {
 			if(connections.find(who) == connections.end())
-				engineLog(ERROR_SEVERITY_FATAL, "Cannot send a message to an invalid connection: %u\n", who);
+				log(ERROR_SEVERITY_FATAL, "Cannot send a message to an invalid connection: %u\n", who);
 
 			impl::getSockets()->SendMessageToConnection(who, messageBuffer.getData(), (u32)messageBuffer.getSize(), steamMessageFlags, nullptr);
 		}
@@ -463,7 +469,7 @@ public:
 			networkInterface->internalOnMessageRecieved(message->m_conn, header, des);
 			
 			if(!endDeserialize(des)) {
-				engineLog(ERROR_SEVERITY_WARNING, "Deserialization failed: (bitsery::ReaderError)%i\n", (int)des.adapter().error());
+				log(ERROR_SEVERITY_WARNING, "Deserialization failed: (bitsery::ReaderError)%i\n", (int)des.adapter().error());
 				connectionAddWarning(message->m_conn);
 			}
 
@@ -477,9 +483,9 @@ public:
 
 	bool open(const SteamNetworkingIPAddr& addr) {
 		if(!networkInterface)
-			engineLog(ERROR_SEVERITY_FATAL, "Before using NetworkManager::open(), the network interface must be set\n");
+			log(ERROR_SEVERITY_FATAL, "Before using NetworkManager::open(), the network interface must be set\n");
 
-		SteamNetworkingConfigValue_t opt;
+		SteamNetworkingConfigValue_t opt = {};
 		opt.SetPtr(k_ESteamNetworkingConfig_Callback_ConnectionStatusChanged, (void*)handleConnectionChange);
 		
 		return networkInterface->open(addr, opt);
@@ -498,7 +504,7 @@ public:
 		connections[conn].warnings++;
 		if (connections[conn].warnings > maxWarnings) {
 			onConnectionLeave(conn);
-			engineLog(ERROR_SEVERITY_WARNING, "Connection <red>exceeded maxWarnings<reset> and was forcibily disconnected\n");
+			log(ERROR_SEVERITY_WARNING, "Connection <red>exceeded maxWarnings<reset> and was forcibily disconnected\n");
 		}
 	}
 
@@ -598,6 +604,20 @@ class EntityWorldNetworkManager {
 	} 
 
 public:
+	EntityWorldNetworkManager() {
+		flecs::world& world = getEntityWorld();
+
+		world.component<NetworkedEntity>();
+		world.component<NetworkedComponent>();
+
+		allEntityManagement.push_back(
+			world.observer()
+			.term<NetworkedEntity>()
+			.event(flecs::OnRemove).each([this](flecs::entity e) {
+				entitiesDestroyed.insert(cf(e));
+			}));
+	}
+
 	~EntityWorldNetworkManager() {
 		for(flecs::entity e : allEntityManagement) {
 			e.destruct();
@@ -623,7 +643,7 @@ public:
 		flecs::world& world = getEntityWorld();
 
 		if(world.is_deferred())
-			engineLog(ERROR_SEVERITY_FATAL, "World must not be in deferred mode when calling serializeComponentSnapshot");
+			log(ERROR_SEVERITY_FATAL, "World must not be in deferred mode when calling serializeComponentSnapshot");
 
 		// Note:
 		// Component updates are in a seperate function because they make the size of messages incredibily large
@@ -665,7 +685,7 @@ public:
 		flecs::world& world = getEntityWorld();
 
 		if (world.is_deferred())
-			engineLog(ERROR_SEVERITY_FATAL, "World must not be in deferred mode when calling serializeEntityComponentMetaSnapshot");
+			log(ERROR_SEVERITY_FATAL, "World must not be in deferred mode when calling serializeEntityComponentMetaSnapshot");
 
 		// Note:
 		// Instead of serializing std::vector<> (which we CAN do) we instead serialize the size
@@ -737,7 +757,7 @@ public:
 		flecs::world& world = getEntityWorld();
 
 		if (world.is_deferred())
-			engineLog(ERROR_SEVERITY_FATAL, "World must not be in deferred mode when calling deserializeComponentSnapshot");
+			log(ERROR_SEVERITY_FATAL, "World must not be in deferred mode when calling deserializeComponentSnapshot");
 
 		u32 archetypeCount;
 		des.object(archetypeCount);
@@ -765,7 +785,7 @@ public:
 		flecs::world& world = getEntityWorld();
 
 		if (world.is_deferred())
-			engineLog(ERROR_SEVERITY_FATAL, "World must not be in deferred mode when calling deserializeEntityComponentMetaSnapshot");
+			log(ERROR_SEVERITY_FATAL, "World must not be in deferred mode when calling deserializeEntityComponentMetaSnapshot");
 
 		u32 archetypeCount = 0;
 		des.object(archetypeCount);
@@ -797,7 +817,7 @@ public:
 			des.object(serId);
 
 			if(!world.is_alive(serId)) {
-				engineLog(ERROR_SEVERITY_WARNING, "Possible dsync: recieved EntityComponentSnapshot contained entity that ws not alive: %u", serId);
+				log(ERROR_SEVERITY_WARNING, "Possible dsync: recieved EntityComponentSnapshot contained entity that ws not alive: %u", serId);
 				continue;
 			}
 	
@@ -812,7 +832,7 @@ public:
 			des.object(serId);
 
 			if (!world.is_alive(serId)) {
-				engineLog(ERROR_SEVERITY_WARNING, "Possible dsync: recieved EntityComponentSnapshot contained entity that ws not alive: %u", serId);
+				log(ERROR_SEVERITY_WARNING, "Possible dsync: recieved EntityComponentSnapshot contained entity that ws not alive: %u", serId);
 				continue;
 			}
 
@@ -827,26 +847,12 @@ public:
 			des.object(serId);
 
 			if (!world.is_alive(serId)) {
-				engineLog(ERROR_SEVERITY_WARNING, "Possible dsync: recieved EntityComponentSnapshot contained entity that ws not alive: %u", serId);
+				log(ERROR_SEVERITY_WARNING, "Possible dsync: recieved EntityComponentSnapshot contained entity that ws not alive: %u", serId);
 				continue;
 			}
 
 			af(serId).disable();
 		}
-	}
-
-	void registerComponentsBegin() {
-		flecs::world& world = getEntityWorld();
-
-		world.component<NetworkedEntity>();
-		world.component<NetworkedComponent>();
-
-		allEntityManagement.push_back(
-			world.observer()
-			.term<NetworkedEntity>()
-			.event(flecs::OnRemove).each([this](flecs::entity e) {
-				entitiesDestroyed.insert(cf(e));
-			}));
 	}
 
 	// this will force a component update, meaning all networked components of all networked entities
@@ -863,7 +869,7 @@ public:
 		flecs::world& world = getEntityWorld();
 
 		flecs::entity componentId = world.component<T>();
-		u32 rawId = (u32)componentId;
+		u32 rawId = cf(componentId);
 
 		componentId.is_a<NetworkedComponent>();
 
@@ -898,12 +904,6 @@ public:
 			}));
 
 		return componentId;
-	}
-
-	void registerComponentsEnd() {
-		flecs::world& world = getEntityWorld();
-
-		// At some point I had functioning code here.
 	}
 	
 	void enable(flecs::entity entity) {
@@ -1095,7 +1095,7 @@ protected:
 	bool open(const SteamNetworkingIPAddr& addr, const SteamNetworkingConfigValue_t& opt) {
 		conn = impl::getSockets()->ConnectByIPAddress(addr, 1, &opt);
 		if (conn == k_HSteamNetConnection_Invalid) {
-			engineLog(ERROR_SEVERITY_WARNING, "Unable to open client socket");
+			log(ERROR_SEVERITY_WARNING, "Unable to open client socket");
 			failed = true;
 			return false;
 		}
@@ -1258,7 +1258,7 @@ protected:
 	bool open(const SteamNetworkingIPAddr& addr, const SteamNetworkingConfigValue_t& opt) {
 		listen = impl::getSockets()->CreateListenSocketIP(addr, 1, &opt);
 		if (listen == k_HSteamListenSocket_Invalid) {
-			engineLog(ERROR_SEVERITY_WARNING, "Unable to open listen socket");
+			log(ERROR_SEVERITY_WARNING, "Unable to open listen socket");
 			return false;
 		}
 
@@ -1287,3 +1287,5 @@ protected:
 private:
 	Ticker<void(float)> networkUpdate;
 };
+
+AE_NAMESPACE_END

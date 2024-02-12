@@ -2,6 +2,8 @@
 
 #include "network.hpp"
 
+AE_NAMESPACE_BEGIN
+
 struct TransformComponent : public NetworkedComponent {
 public:
     sf::Vector2f getUnweightedPos() const { return pos; }
@@ -27,7 +29,7 @@ public:
         s.object(origin);
     }
 
-    bool isSameAsLast() {
+    bool isSameAsLast() const {
         return lastPos == pos && lastRot == rot;
     }
 
@@ -42,16 +44,16 @@ private:
 
 struct IntegratableComponent : public NetworkedComponent {
 public:
-    sf::Vector2f getLinearVelocity() { return linearVelocity; }
+    sf::Vector2f getLinearVelocity() const { return linearVelocity; }
 
     void addLinearVelocity(sf::Vector2f vel) {
         setLast();
         linearVelocity += vel;
     }
 
-    float getAngularVelocity() { return angularVelocity; }
+    float getAngularVelocity() const { return angularVelocity; }
 
-    bool isSameAsLast() {
+    bool isSameAsLast() const {
         return angularVelocity == lastAngularVelocity && lastLinearVelocity == linearVelocity;
     }
 
@@ -127,7 +129,7 @@ namespace impl {
             case ShapeEnum::Circle:
                 return testCollision(dynamic_cast<Polygon&>(shape1), dynamic_cast<Circle&>(shape2), manifold);
             default:
-                engineLog(ERROR_SEVERITY_FATAL, "Invalid Shape Type");
+                log(ERROR_SEVERITY_FATAL, "Invalid Shape Type");
             } break;
 
         case ShapeEnum::Circle:
@@ -139,12 +141,15 @@ namespace impl {
                 return testCollision(dynamic_cast<Circle&>(shape1), dynamic_cast<Circle&>(shape2), manifold);
 
             default:
-                engineLog(ERROR_SEVERITY_FATAL, "Invalid Shape Type");
+                log(ERROR_SEVERITY_FATAL, "Invalid Shape Type");
             }
 
         default:
-            engineLog(ERROR_SEVERITY_FATAL, "Invalid Shape Type");
+            log(ERROR_SEVERITY_FATAL, "Invalid Shape Type");
+            break;
         }
+
+        return false; // silences warnings
     }
 
     inline struct {
@@ -175,7 +180,7 @@ namespace impl {
                         .event<CollisionEvent>()
                         .id<ShapeComponent>()
                         .entity(iter.entity(i))
-                        .ctx(CollisionEvent(manifold, iter.entity(i), element.entityId))
+                        .ctx(CollisionEvent(manifold, iter.entity(i), iter.world().get_alive(element.entityId)))
                         .emit();
                 }
             }
@@ -251,8 +256,15 @@ struct CoreModule {
     }
 
     static void registerCore() {
+        getEntityWorld().enable_range_check(false);
+
         EntityWorldNetworkManager& manager = getEntityWorldNetworkManager();
         manager.registerComponent<TransformComponent>();
         manager.registerComponent<ShapeComponent>();
+        manager.registerComponent<IntegratableComponent>();
+
+        getEntityWorld().enable_range_check(true);
     }
 };
+
+AE_NAMESPACE_END

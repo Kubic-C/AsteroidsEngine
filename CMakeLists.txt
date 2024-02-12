@@ -1,7 +1,5 @@
-# Scrap engine is the name im coming up with for now
-
 cmake_minimum_required(VERSION "3.12")
-project(SCRAP)
+project(AsteroidsEngine)
 
 set(BUILD_SHARED_LIBS true)
 unset(BUILD_STATIC_LIBS)

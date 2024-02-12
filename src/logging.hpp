@@ -2,13 +2,18 @@
 
 #include "includes.hpp"
 
-inline std::string& trim(std::string& str) {
-	str.erase(str.begin(), std::find_if(str.begin(), str.end(), [](char x){return !std::isspace(x);}));
-	str.erase(std::find_if(str.rbegin(), str.rend(), []( char ch) {
-		return !std::isspace(ch);
-		}).base(), str.end());
-	return str;
+AE_NAMESPACE_BEGIN
+
+namespace impl {
+	inline std::string& trim(std::string& str) {
+		str.erase(str.begin(), std::find_if(str.begin(), str.end(), [](char x){return !std::isspace(x);}));
+		str.erase(std::find_if(str.rbegin(), str.rend(), []( char ch) {
+			return !std::isspace(ch);
+			}).base(), str.end());
+		return str;
+	}
 }
+
 
 inline std::string vformatString(const char* format, va_list args) {
 	std::string str = "";
@@ -114,7 +119,7 @@ private:
 		int i = start;
 		for(; i < str.size() && str[i] != END_DECORATOR; i++) {
 			if(str[i] == SEPERATOR_DECORATOR) {
-				std::string decorationKey = trim(str.substr(startOfDecoration, i - startOfDecoration));
+				std::string decorationKey = impl::trim(str.substr(startOfDecoration, i - startOfDecoration));
 				if(decoratorMap.find(decorationKey) != decoratorMap.end())
 					decorations += decoratorMap[decorationKey];
 					
@@ -122,7 +127,7 @@ private:
 			}
 		}
 
-		std::string decorationKey = trim(str.substr(startOfDecoration, i - startOfDecoration));
+		std::string decorationKey = impl::trim(str.substr(startOfDecoration, i - startOfDecoration));
 		if (decoratorMap.find(decorationKey) != decoratorMap.end())
 			decorations += decoratorMap[decorationKey];
 
@@ -162,4 +167,6 @@ private:
 
 private:
 	std::map<std::string, std::string> decoratorMap;
-} engineLog;
+} log;
+
+AE_NAMESPACE_END

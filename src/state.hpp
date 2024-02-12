@@ -2,6 +2,8 @@
 
 #include "includes.hpp"
 
+AE_NAMESPACE_BEGIN
+
 class State {
 public:
 	virtual void onEntry() {}
@@ -18,3 +20,5 @@ protected:
 
 class UnknownModule { public: UnknownModule(flecs::world& world) {} };
 class UnknownState : public State {};
+
+AE_NAMESPACE_END

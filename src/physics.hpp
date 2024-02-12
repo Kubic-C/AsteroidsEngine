@@ -1,6 +1,8 @@
 #pragma once
 #include "includes.hpp"
 
+AE_NAMESPACE_BEGIN
+
 inline float crossProduct(const sf::Vector2f& v1, const sf::Vector2f& v2) {
 	return (v1.x * v2.y) - (v1.y * v2.x);
 }
@@ -607,7 +609,7 @@ private:
 
 struct SpatialIndexElement : AABB {
 	u32 shapeId;
-	flecs::entity entityId;
+	u32 entityId;
 
 	bool operator==(const SpatialIndexElement& other) {
 		return shapeId == other.shapeId;
@@ -619,7 +621,7 @@ struct Indexable {
 	const float* max(const SpatialIndexElement& value) const { return value.max.data(); }
 };
 
-typedef spatial::RTree<float, SpatialIndexElement, 2, 8, 4, Indexable> SpatialIndexTree;
+typedef spatial::RTree<float, SpatialIndexElement, 2, 4, 1, Indexable> SpatialIndexTree;
 
 class PhysicsWorld;
 extern PhysicsWorld& getPhysicsWorld();
@@ -675,7 +677,7 @@ public:
 		Shape& shape = getShape(id);
 
 		SpatialIndexElement element;
-		element.entityId = flecsId;
+		element.entityId = (u32)flecsId;
 		element.shapeId = id;
 		AABB aabb = shape.getAABB();
 		element.min = aabb.min;
@@ -701,3 +703,4 @@ private:
 	FreeList<std::variant<Circle, Polygon>> shapes;
 };
 
+AE_NAMESPACE_END

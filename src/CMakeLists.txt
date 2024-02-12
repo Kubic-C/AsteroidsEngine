@@ -1,5 +1,5 @@
 
-add_library(scrap STATIC 
+add_library(AsteroidsEngine STATIC 
 	"includes.hpp" 
 	"engine.hpp" "engine.cpp" 
 	"logging.hpp" "state.hpp" 
@@ -9,8 +9,9 @@ add_library(scrap STATIC
 	"physics.hpp"
 	"core.hpp")
 
-target_include_directories(scrap PUBLIC "${CMAKE_CURRENT_SRC_DIR}")
-target_link_libraries(scrap PUBLIC 	bitsery 
+target_include_directories(AsteroidsEngine PUBLIC "${CMAKE_CURRENT_SRC_DIR}")
+target_link_libraries(AsteroidsEngine PUBLIC 	
+	bitsery 
 	GameNetworkingSockets::static
 	sfml-system
 	sfml-graphics

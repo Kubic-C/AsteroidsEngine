@@ -50,10 +50,15 @@ typedef int16_t  i16;
 typedef int32_t  i32;
 typedef int64_t  i64;
 
-// will change
-#define ENGINE_NAME SCRAP
-#define SCRAP_BUILD 0
+#define AE_NAME AsteroidsEngine
+#define AE_BUILD 1
 
+// to stop auto-formatting
+#define AE_NAMESPACE_NAME ae
+#define AE_NAMESPACE_BEGIN namespace AE_NAMESPACE_NAME {
+#define AE_NAMESPACE_END }
+
+AE_NAMESPACE_BEGIN
 
 template<typename T>
 class IndirectContainer {
@@ -102,3 +107,5 @@ private:
 	T* m_data = nullptr;
 	size_t m_size = 0;
 };
+
+AE_NAMESPACE_END

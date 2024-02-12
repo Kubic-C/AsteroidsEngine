@@ -2,6 +2,8 @@
 
 #include "includes.hpp"
 
+AE_NAMESPACE_BEGIN
+
 inline auto startTime = std::chrono::high_resolution_clock::now();
 
 inline std::chrono::high_resolution_clock::time_point nowTp() {
@@ -86,3 +88,5 @@ private:
     float lastTick = 0.0f;
     float deltaTime = 0.0f;
 };
+
+AE_NAMESPACE_END

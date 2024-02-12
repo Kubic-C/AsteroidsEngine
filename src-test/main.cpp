@@ -1,6 +1,7 @@
 #include <iostream>
 #include "entry.hpp"
 
+using namespace ae;
 
 struct MessageText {
 	std::string str = "";
@@ -23,7 +24,7 @@ void serialize(S& s, CustomMessageHeader& header) {
 class CustomClientInterface : public ClientInterface {
 public:
 	void onConnectionJoin(HSteamNetConnection conn) override {
-		engineLog("Client- Connection joined!\n");
+		ae::log("Client- Connection joined!\n");
 	}
 
 	void onMessageRecieved(HSteamNetConnection conn, MessageHeader header, Deserializer& des) override {
@@ -31,13 +32,13 @@ public:
 		case MESSAGE_HEADER_TEXT: {
 			MessageText text;
 			des.object(text);
-			engineLog("recieved text: <green>%s<reset>\n", text.str.c_str());
+			ae::log("recieved text: <green>%s<reset>\n", text.str.c_str());
 		} break;
 		}
 	}
 
 	void onConnectionLeave(HSteamNetConnection conn) override {
-		engineLog("Client- Connection left!\n");
+		ae::log("Client- Connection left!\n");
 	}
 };
 
@@ -45,7 +46,7 @@ class CustomServerInterface : public ServerInterface {
 	void onConnectionJoin(HSteamNetConnection conn) override {
 		NetworkManager& networkManager = getNetworkManager();
 
-		engineLog("Server- Connection joined!\n");
+		ae::log("Server- Connection joined!\n");
 		MessageText text;
 
 		MessageBuffer buffer;
@@ -68,7 +69,7 @@ class CustomServerInterface : public ServerInterface {
 	}
 
 	void onConnectionLeave(HSteamNetConnection conn) override {
-		engineLog("Server- Connection left!\n");
+		ae::log("Server- Connection left!\n");
 	}
 };
 
@@ -96,6 +97,7 @@ public:
 
 	void onLeave() override {
 		getGui().removeAllWidgets();
+		openFailedText = nullptr;
 	}
 
 	void onTick() override {
@@ -225,17 +227,14 @@ int main(int argc, char* argv[]) {
 	transitionState<InitState>();
 
 	EntityWorldNetworkManager& worldNetworkManager = getEntityWorldNetworkManager();
-	worldNetworkManager.registerComponentsBegin();
-	CoreModule::registerCore();
 	worldNetworkManager.registerComponent<TestComponent>();
-	worldNetworkManager.registerComponentsEnd();
+	
+	auto q = getEntityWorld().query<ShapeComponent>();
 
-	setUpdateCallback([](){
+	setUpdateCallback([&](){
 		PhysicsWorld& physicsWorld = getPhysicsWorld();
 		flecs::world& entityWorld = getEntityWorld();
 		
-		auto q = entityWorld.query<ShapeComponent>();
-			
 		q.each([&](ShapeComponent& comp){
 			if(physicsWorld.getShape(comp.shape).getType() == ShapeEnum::Circle) {
 				Circle& circle = physicsWorld.getCircle(comp.shape);
@@ -244,8 +243,6 @@ int main(int argc, char* argv[]) {
 				getWindow().draw(drawCircle);
 			}
 		});	
-
-		q.destruct();
 	});
 
 	mainLoop();

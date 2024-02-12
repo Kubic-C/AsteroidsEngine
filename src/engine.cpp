@@ -1,25 +1,24 @@
 #include "engine.hpp"
 
+AE_NAMESPACE_BEGIN
+
 /* for internal use only */
 struct Engine {
-	std::unordered_map<u64, std::shared_ptr<State>> states;
-	std::shared_ptr<State> state;
+	// ORDERED BY INITIALIZATION, DO NOT CHANGE THE ORDER- thank you
 
 	flecs::world entityWorld;
-	std::shared_ptr<tgui::Gui> gui;
-	std::shared_ptr<sf::RenderWindow> window;
-
 	ISteamNetworkingSockets* sockets;
 	ISteamNetworkingUtils* util;
 	std::shared_ptr<NetworkManager> networkManager;
 	std::shared_ptr<EntityWorldNetworkManager> entityWorldNetwork;
-
+	Ticker<void(float)> ticker;
+	std::function<void()> updateCallback;
+	std::shared_ptr<sf::RenderWindow> window;
+	std::shared_ptr<tgui::Gui> gui;
 	std::shared_ptr<PhysicsWorld> physicsWorld;
 	std::shared_ptr<PhysicsWorldNetworkManager> physicsWorldNetwork;
-
-	Ticker<void(float)> ticker;
-
-	std::function<void()> updateCallback;
+	std::unordered_map<u64, std::shared_ptr<State>> states;
+	std::shared_ptr<State> state;
 };
 
 Engine* engine = nullptr; 
@@ -31,10 +30,10 @@ namespace impl {
 
 	u64 _registerState(std::shared_ptr<State> ptr, std::type_index typeId) {
 		if(typeId.hash_code() > UINT64_MAX)
-			engineLog(ERROR_SEVERITY_FATAL, "Hashcode of state surpassed max u64\n");
+			log(ERROR_SEVERITY_FATAL, "Hashcode of state surpassed max u64\n");
 
 		if(validState((u64)typeId.hash_code()))
-			engineLog(ERROR_SEVERITY_FATAL, "State already registered: %s: %llu\n", typeId.name(), (u64)typeId.hash_code());
+			log(ERROR_SEVERITY_FATAL, "State already registered: %s: %llu\n", typeId.name(), (u64)typeId.hash_code());
 
 		engine->states[(u64)typeId.hash_code()] = ptr;
 
@@ -83,20 +82,21 @@ namespace impl {
 	}
 }
 
-void initEngine() {
+void init() {
 	if(engine)
-		engineLog(ERROR_SEVERITY_FATAL, "Engine already initialized\n");
+		log(ERROR_SEVERITY_FATAL, "Engine already initialized\n");
 
 	engine = new Engine();
 	
 	// Networking
 	SteamNetworkingErrMsg steamNetworkingErrMsg;
 	if(!GameNetworkingSockets_Init(nullptr, steamNetworkingErrMsg))
-		engineLog(ERROR_SEVERITY_FATAL, "Unable to initialize steam networking library, %s\n", (const char*)&steamNetworkingErrMsg[0]);
+		log(ERROR_SEVERITY_FATAL, "Unable to initialize steam networking library, %s\n", (const char*)&steamNetworkingErrMsg[0]);
 	engine->sockets = SteamNetworkingSockets();
 	engine->util = SteamNetworkingUtils();
 	engine->networkManager = std::make_shared<NetworkManager>();
 	engine->entityWorldNetwork = std::make_shared<EntityWorldNetworkManager>();
+	CoreModule::registerCore();
 
 	// Time
 	engine->ticker.setRate(60.0f);
@@ -104,10 +104,6 @@ void initEngine() {
 
 	// Window
 	setWindow(std::make_shared<sf::RenderWindow>(sf::VideoMode(sf::Vector2u(800, 600)), "Default"));
-
-	// State
-	u64 unknownStateId = registerState<UnknownState, UnknownModule>();
-	engine->state = engine->states[unknownStateId];
 	
 	// Physics
 	engine->physicsWorld = std::make_shared<PhysicsWorld>();
@@ -115,6 +111,10 @@ void initEngine() {
 
 	// Core
 	engine->entityWorld.import<CoreModule>();
+
+	// State
+	u64 unknownStateId = registerState<UnknownState, UnknownModule>();
+	engine->state = engine->states[unknownStateId];
 }
 
 NetworkManager& getNetworkManager() {
@@ -147,7 +147,7 @@ State& getCurrentState() {
 
 void transitionState(u64 stateId) {
 	if(!impl::validState(stateId)) {
-		engineLog(ERROR_SEVERITY_WARNING, "Attempted to transition to a invalid state: %u\n", stateId);
+		log(ERROR_SEVERITY_WARNING, "Attempted to transition to a invalid state: %u\n", stateId);
 		return;
 	}
 
@@ -166,7 +166,8 @@ void transitionState(u64 stateId) {
 
 void setWindow(std::shared_ptr<sf::RenderWindow> window) {
 	engine->window = window;
-	engine->gui = std::make_shared<tgui::Gui>(*engine->window);
+	engine->gui = std::make_shared<tgui::Gui>();
+	engine->gui->setWindow(*engine->window);
 }
 
 sf::RenderWindow& getWindow() {
@@ -192,25 +193,13 @@ void mainLoop() {
 	}
 }
 
-void freeEngine() {
+void free() {
 	if(!engine)
-		engineLog(ERROR_SEVERITY_FATAL, "Engine has not been initialized\n");
-
-	for(auto& pair : engine->states) {
-		pair.second = nullptr;
-	}
-
-	engine->window->close();
-
-	engine->state = nullptr;
-	engine->gui = nullptr;
-	engine->window = nullptr;
-	engine->entityWorldNetwork = nullptr;
-	engine->physicsWorld = nullptr;
-	engine->physicsWorldNetwork = nullptr;
-	engine->networkManager = nullptr;
-
-	GameNetworkingSockets_Kill();
+		log(ERROR_SEVERITY_FATAL, "Engine has not been initialized\n");
 
 	delete engine;
+
+	GameNetworkingSockets_Kill();
 }
+
+AE_NAMESPACE_END

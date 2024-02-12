@@ -4,6 +4,8 @@
 #include "core.hpp"
 #include "state.hpp"
 
+AE_NAMESPACE_BEGIN
+
 // for when I want to change the rendering backend
 typedef tgui::Gui Gui;
 
@@ -11,7 +13,7 @@ namespace impl {
 	u64 _registerState(std::shared_ptr<State> ptr, std::type_index typeId);
 }
 
-void initEngine();
+void init();
 
 Gui& getGui();
 
@@ -59,4 +61,6 @@ void setTps(float tps);
 void setUpdateCallback(std::function<void()> callback);
 void mainLoop();
 
-void freeEngine();
+void free();
+
+AE_NAMESPACE_END
