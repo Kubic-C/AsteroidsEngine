@@ -11,6 +11,7 @@ typedef tgui::Gui Gui;
 
 namespace impl {
 	u64 _registerState(std::shared_ptr<State> ptr, std::type_index typeId);
+	void _registerNetworkStateModule(flecs::entity module, std::type_index networkInterfaceId, u64 stateId);
 }
 
 void init();
@@ -38,9 +39,22 @@ u64 getStateId() {
 
 State& getCurrentState();
 
+u64 getCurrentStateId();
+
 template<typename T>
 T& getCurrentState() {
 	return dynamic_cast<T&>(getCurrentState());
+}
+
+// when the NetworkInterfaceType is currently being used
+// and the state type is currently being used, make ModuleType active
+template<typename NetworkInterfaceType, typename StateType, typename ModuleType>
+void registerNetworkInterfaceStateModule() {
+	flecs::world& world = getEntityWorld();
+	flecs::entity module = world.import<ModuleType>();
+
+	module.disable();
+	impl::_registerNetworkStateModule(module, std::type_index(typeid(NetworkInterfaceType)), getStateId<StateType>());
 }
 
 void transitionState(u64 stateId);

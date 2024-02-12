@@ -2,6 +2,11 @@
 
 AE_NAMESPACE_BEGIN
 
+struct StateInfo {
+	std::shared_ptr<State> state = nullptr;
+	std::unordered_map<std::type_index, flecs::entity> networkModules;
+};
+
 /* for internal use only */
 struct Engine {
 	// ORDERED BY INITIALIZATION, DO NOT CHANGE THE ORDER- thank you
@@ -17,8 +22,8 @@ struct Engine {
 	std::shared_ptr<tgui::Gui> gui;
 	std::shared_ptr<PhysicsWorld> physicsWorld;
 	std::shared_ptr<PhysicsWorldNetworkManager> physicsWorldNetwork;
-	std::unordered_map<u64, std::shared_ptr<State>> states;
-	std::shared_ptr<State> state;
+	std::unordered_map<u64, StateInfo> states;
+	u64 activeState;
 };
 
 Engine* engine = nullptr; 
@@ -35,9 +40,16 @@ namespace impl {
 		if(validState((u64)typeId.hash_code()))
 			log(ERROR_SEVERITY_FATAL, "State already registered: %s: %llu\n", typeId.name(), (u64)typeId.hash_code());
 
-		engine->states[(u64)typeId.hash_code()] = ptr;
+		engine->states[(u64)typeId.hash_code()].state = ptr;
 
 		return (u64)typeId.hash_code();
+	}
+
+	void _registerNetworkStateModule(flecs::entity module, std::type_index networkInterfaceId, u64 stateId) {
+		if(!validState(stateId))
+			log(ERROR_SEVERITY_FATAL, "Cannot register Network State Module if the state is not already registered");
+
+		engine->states[stateId].networkModules[networkInterfaceId] = module;
 	}
 
 	bool shouldExit() {
@@ -69,7 +81,7 @@ namespace impl {
 		engine->window->clear();
 		if(engine->updateCallback)
 			engine->updateCallback();
-		engine->state->onUpdate();
+		engine->states[engine->activeState].state->onUpdate();
 		engine->gui->draw();
 		engine->window->display();
 
@@ -77,7 +89,7 @@ namespace impl {
 	}
 
 	void tick(float deltaTime) {
-		engine->state->onTick();
+		engine->states[engine->activeState].state->onTick(deltaTime);
 		engine->entityWorld.progress(deltaTime);	
 	}
 }
@@ -114,7 +126,7 @@ void init() {
 
 	// State
 	u64 unknownStateId = registerState<UnknownState, UnknownModule>();
-	engine->state = engine->states[unknownStateId];
+	engine->activeState = unknownStateId;
 }
 
 NetworkManager& getNetworkManager() {
@@ -142,7 +154,11 @@ Gui& getGui() {
 }
 
 State& getCurrentState() {
-	return *engine->state;
+	return *engine->states[engine->activeState].state;
+}
+
+u64 getCurrentStateId() {
+	return engine->activeState;
 }
 
 void transitionState(u64 stateId) {
@@ -151,17 +167,31 @@ void transitionState(u64 stateId) {
 		return;
 	}
 
-	if(engine->states[stateId].get() == engine->state.get())
+	if(stateId == engine->activeState)
 		return;
 	
-	std::shared_ptr<State> prevState = engine->state;
-	std::shared_ptr<State> nextState = engine->states[stateId];
+	StateInfo& prevState = engine->states[engine->activeState];
+	StateInfo& nextState = engine->states[stateId];
 
-	prevState->getModule().disable();
-	prevState->onLeave();
-	engine->state = nextState;
-	nextState->onEntry();
-	nextState->getModule().enable();
+	prevState.state->getModule().disable();
+	prevState.state->onLeave();
+	engine->activeState = stateId;
+	nextState.state->onEntry();
+	nextState.state->getModule().enable();
+	
+	// enable NetworkStateModules
+	NetworkManager& networkManager = *engine->networkManager;
+	if(networkManager.hasNetworkInterface()) {
+		NetworkInterface& interface = networkManager.getNetworkInterface();
+		std::type_index id = std::type_index(typeid(interface));
+
+		if(prevState.networkModules.find(id) != prevState.networkModules.end()) {
+			prevState.networkModules[id].disable();
+		}
+		if (nextState.networkModules.find(id) != nextState.networkModules.end()) {
+			nextState.networkModules[id].enable();
+		}
+	}
 }
 
 void setWindow(std::shared_ptr<sf::RenderWindow> window) {

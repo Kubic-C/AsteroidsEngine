@@ -8,7 +8,7 @@ class State {
 public:
 	virtual void onEntry() {}
 	virtual void onLeave() {}
-	virtual void onTick() {}
+	virtual void onTick(float deltaTime) {}
 	virtual void onUpdate() {}
 
 	flecs::entity getModule() const { return module; }

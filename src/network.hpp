@@ -316,18 +316,15 @@ protected:
 
 	virtual void close() = 0;
 
-public: // when some extra inernal stuff needs to go on I just shove it in below
-	virtual void internalOnMessageRecieved(HSteamNetConnection conn, MessageHeader header, Deserializer& deserializer) {
-		onMessageRecieved(conn, header, deserializer);
+public:
+	// returns true if the message can't be used
+	virtual bool _internalOnMessageRecieved(HSteamNetConnection conn, MessageHeader header, Deserializer& deserializer) {
+		return true;
 	}
 
-	virtual void internalOnConnectionJoin(HSteamNetConnection conn) {
-		onConnectionJoin(conn);
-	}
+	virtual void _internalOnConnectionJoin(HSteamNetConnection conn) {}
 
-	virtual void internalUpdate() {
-		update();
-	}
+	virtual void _internalUpdate() {}
 };
 
 class NetworkManager;
@@ -374,6 +371,14 @@ public:
 		return (bool)networkInterface;
 	}
 
+	template<typename T> 
+	bool hasNetworkInterface() const {
+		if(!hasNetworkInterface())
+			return false;
+
+		return dynamic_cast<T*>(&*networkInterface) != nullptr;
+	}
+
 	/**
 	 * Will send a message containing "data" to the connection "who"
 	 * 
@@ -411,8 +416,8 @@ public:
 			impl::MessageBufferMeta* meta = new impl::MessageBufferMeta;
 			messageBuffer.setOwner(false);
 
-			for (auto& pair: connections) {
-				if (pair.first== who)
+			for (auto& pair : connections) {
+				if (pair.first == who)
 					continue;
 
 				networkingMessages.push_back(impl::getUtils()->AllocateMessage(0));
@@ -458,6 +463,9 @@ public:
 	}
 
 	void update() {
+		if(!networkInterface)
+			return;
+
 		impl::getSockets()->RunCallbacks();
 
 		ISteamNetworkingMessage* message = nullptr;
@@ -466,7 +474,8 @@ public:
 			MessageHeader header = MESSAGE_HEADER_INVALID;
 
 			des.object(header);
-			networkInterface->internalOnMessageRecieved(message->m_conn, header, des);
+			if(networkInterface->_internalOnMessageRecieved(message->m_conn, header, des))
+				networkInterface->onMessageRecieved(message->m_conn, header, des);
 			
 			if(!endDeserialize(des)) {
 				log(ERROR_SEVERITY_WARNING, "Deserialization failed: (bitsery::ReaderError)%i\n", (int)des.adapter().error());
@@ -476,9 +485,8 @@ public:
 			message->Release(); // No need for this message anymore
 		}
 
-		if(networkInterface) {
-			networkInterface->internalUpdate();
-		}
+		networkInterface->_internalUpdate();
+		networkInterface->update();
 	}
 
 	bool open(const SteamNetworkingIPAddr& addr) {
@@ -539,13 +547,16 @@ protected:
 		if(!networkInterface->shouldAcceptConnection(conn))
 			return;
 
+		connections.insert(std::pair(conn, ConnectionData{}));
+
 		networkInterface->acceptConnection(conn);
 	}
 
 	void onConnectionJoin(HSteamNetConnection conn) {
 		impl::getSockets()->SetConnectionPollGroup(conn, pollGroup);
-		connections.insert(std::pair(conn, ConnectionData{}));
-		networkInterface->internalOnConnectionJoin(conn);
+		
+		networkInterface->_internalOnConnectionJoin(conn);
+		networkInterface->onConnectionJoin(conn);
 	}
 
 	void onConnectionLeave(HSteamNetConnection conn) {
@@ -644,6 +655,18 @@ public:
 
 		if(world.is_deferred())
 			log(ERROR_SEVERITY_FATAL, "World must not be in deferred mode when calling serializeComponentSnapshot");
+
+		for(u32 rawId : entitiesDestroyed) {
+			flecs::entity e = af(rawId);
+
+			if (componentsChanged.find(e) != componentsChanged.end()) {
+				componentsChanged.erase(cf(e));
+			}
+
+			if (componentsDestroyed.find(e) != componentsDestroyed.end()) {
+				componentsDestroyed.erase(cf(e));
+			}
+		}
 
 		// Note:
 		// Component updates are in a seperate function because they make the size of messages incredibily large
@@ -1103,6 +1126,11 @@ protected:
 			return false;
 		}
 
+		// this will insure that conn gets added to the connections list within the networkManager
+		// so if some function wants to send a message right open even we aren't technically connected
+		// they can.
+		getNetworkManager().update();
+
 		connected = false;
 		failed = false;
 
@@ -1125,13 +1153,11 @@ protected:
 		conn = k_HSteamNetConnection_Invalid;
 	}
 
-	void internalOnConnectionJoin(HSteamNetConnection conn) override {
+	void _internalOnConnectionJoin(HSteamNetConnection conn) override {
 		connected = true;
-		
-		onConnectionJoin(conn);
 	}
 
-	void internalOnMessageRecieved(HSteamNetConnection conn, MessageHeader header, Deserializer& des) override {
+	bool _internalOnMessageRecieved(HSteamNetConnection conn, MessageHeader header, Deserializer& des) override {
 		flecs::world& world = getEntityWorld();
 		EntityWorldNetworkManager& entity = getEntityWorldNetworkManager();
 		PhysicsWorldNetworkManager& physics = getPhysicsWorldNetworkManager();
@@ -1157,11 +1183,12 @@ protected:
 			break;
 	
 		default:
-			onMessageRecieved(conn, header, des);
-			break;
+			world.enable_range_check(true);
+			return true;
 		}
 
 		world.enable_range_check(true);
+		return false;
 	}
 
 protected:
@@ -1284,7 +1311,7 @@ protected:
 		impl::getSockets()->CloseListenSocket(listen);
 	}
 
-	void internalUpdate() override {
+	void _internalUpdate() override {
 		networkUpdate.update();
 	}
 

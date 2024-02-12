@@ -100,7 +100,7 @@ public:
 		openFailedText = nullptr;
 	}
 
-	void onTick() override {
+	void onTick(float deltaTime) override {
 		if(getNetworkManager().hasNetworkInterface()) {
 			auto& networkInterface = getNetworkManager().getNetworkInterface();
 

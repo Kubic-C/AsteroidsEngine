@@ -3,11 +3,11 @@ add_library(AsteroidsEngine STATIC
 	"includes.hpp" 
 	"engine.hpp" "engine.cpp" 
 	"logging.hpp" "state.hpp" 
-	"entry.hpp" 
 	"time.hpp"
 	"network.hpp"
 	"physics.hpp"
-	"core.hpp")
+	"core.hpp" 
+	"entry.hpp" "entry.cpp")
 
 target_include_directories(AsteroidsEngine PUBLIC "${CMAKE_CURRENT_SRC_DIR}")
 target_link_libraries(AsteroidsEngine PUBLIC 	

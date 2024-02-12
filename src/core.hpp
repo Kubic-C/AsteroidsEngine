@@ -76,6 +76,21 @@ private:
     float angularVelocity = 0.0f;
 };
 
+struct TimedDeleteComponent {
+    TimedDeleteComponent() 
+        : timeLeft(0.0f) {}
+    TimedDeleteComponent(float time)
+        : timeLeft(time) {}
+
+    float getTime() const { return timeLeft; }
+    void setTime(float time) { timeLeft = time;}
+    void subtractTime(float amount)  { timeLeft -= amount; }
+    bool isTimeDone() const { return timeLeft <= 0.0f; }
+
+private:
+    float timeLeft;
+};
+
 struct CollisionEvent {
     CollisionEvent() = default;
     CollisionEvent(CollisionManifold manifold, flecs::entity self, flecs::entity other)
@@ -220,6 +235,17 @@ namespace impl {
             }
         }
     }
+
+    inline void isTimedDeleteDone(flecs::iter& iter, TimedDeleteComponent* timers) {
+        for(auto i : iter) {
+            TimedDeleteComponent& timer = timers[i];
+
+            timer.subtractTime(iter.delta_time());
+            if(timer.isTimeDone()) {
+                iter.entity(i).destruct();
+            }
+        }
+    }
 }
 
 /*
@@ -253,6 +279,9 @@ struct CoreModule {
         world.system<TransformComponent, ShapeComponent>().kind(prePhysics).iter(impl::shapeSet);
         world.system<ShapeComponent>().kind(mainPhysics).iter(impl::shapeCollide);
         world.system<TransformComponent, ShapeComponent>().kind(postPhysics).iter(impl::transformSet);
+        world.system<TransformComponent, IntegratableComponent>().iter(impl::integrate);
+
+        world.system<TimedDeleteComponent>().iter(impl::isTimedDeleteDone);
     }
 
     static void registerCore() {
