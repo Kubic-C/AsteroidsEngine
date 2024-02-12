@@ -108,4 +108,18 @@ private:
 	size_t m_size = 0;
 };
 
+extern flecs::world& getEntityWorld();
+
+namespace impl {
+	// Clears the extra fields of an entity id. Clear Field (cf)
+	inline u32 cf(u64 id) {
+		return id & ECS_ENTITY_MASK;
+	}
+
+	// Adds back the extra fields of an entity id. Add Field(af)
+	inline flecs::entity af(u32 id) {
+		return getEntityWorld().get_alive(id);
+	}
+}
+
 AE_NAMESPACE_END

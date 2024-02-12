@@ -669,6 +669,13 @@ public:
 	}
 
 	void eraseShape(u32 id) {
+		SpatialIndexElement element;
+		element.shapeId = id;
+		AABB aabb = getShape(id).getAABB();
+		element.min = aabb.min;
+		element.max = aabb.max;
+
+		rtree.remove(element);
 		shapes.erase(id);
 	}
 
@@ -677,7 +684,7 @@ public:
 		Shape& shape = getShape(id);
 
 		SpatialIndexElement element;
-		element.entityId = (u32)flecsId;
+		element.entityId = impl::cf(flecsId);
 		element.shapeId = id;
 		AABB aabb = shape.getAABB();
 		element.min = aabb.min;

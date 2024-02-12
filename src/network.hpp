@@ -367,6 +367,12 @@ public:
 		return *networkInterface;
 	}
 
+	template<typename T>
+	T& getNetworkInterface() const {
+		return dynamic_cast<T&>(*networkInterface);
+	}
+
+
 	bool hasNetworkInterface() const {
 		return (bool)networkInterface;
 	}
@@ -604,16 +610,6 @@ struct NetworkedComponent {};
 struct NoPhase {};
 
 class EntityWorldNetworkManager {
-	// Clears the extra fields of an entity id. Clear Field (cf)
-	u32 cf(u64 id) {
-		return id & ECS_ENTITY_MASK;
-	}
-
-	// Adds back the extra fields of an entity id. Add Field(af)
-	flecs::entity af(u32 id) {
-		return getEntityWorld().get_alive(id);
-	} 
-
 public:
 	EntityWorldNetworkManager() {
 		flecs::world& world = getEntityWorld();
@@ -625,7 +621,7 @@ public:
 			world.observer()
 			.term<NetworkedEntity>()
 			.event(flecs::OnRemove).each([this](flecs::entity e) {
-				entitiesDestroyed.insert(cf(e));
+				entitiesDestroyed.insert(impl::cf(e));
 			}));
 	}
 
@@ -656,18 +652,6 @@ public:
 		if(world.is_deferred())
 			log(ERROR_SEVERITY_FATAL, "World must not be in deferred mode when calling serializeComponentSnapshot");
 
-		for(u32 rawId : entitiesDestroyed) {
-			flecs::entity e = af(rawId);
-
-			if (componentsChanged.find(e) != componentsChanged.end()) {
-				componentsChanged.erase(cf(e));
-			}
-
-			if (componentsDestroyed.find(e) != componentsDestroyed.end()) {
-				componentsDestroyed.erase(cf(e));
-			}
-		}
-
 		// Note:
 		// Component updates are in a seperate function because they make the size of messages incredibily large
 		// so to avoid lag we seperate EntityComponentMeta updates and ComponentChanged updates.
@@ -679,7 +663,7 @@ public:
 		// we are associating a set of changed components with a list of entities.
 		cache.archetypeComponent.clear();
 		for(auto& pair : componentsChanged) {
-			if(entitiesDestroyed.find(pair.first) != entitiesDestroyed.end())
+			if(!getEntityWorld().is_alive(pair.first))
 				continue;
 
 			cache.archetypeComponent[pair.second].push_back(pair.first);
@@ -696,7 +680,10 @@ public:
 				ser.object(entityId);
 				
 				for(u32 compId : pair.first) {
-					serializeRecords[compId](ser, af(entityId).get_mut(af(compId)));
+					flecs::entity entity = impl::af(entityId);
+					flecs::entity component = impl::af(compId);
+
+					serializeRecords[compId](ser, entity.get_mut(component));
 				}
 			}
 		}
@@ -731,9 +718,11 @@ public:
 		//  - Disabled entities
 
 		// Destroyed Components
-
 		cache.archetypeComponent.clear();
 		for (auto& pair : componentsDestroyed) {
+			if (!getEntityWorld().is_alive(pair.first))
+				continue;
+
 			cache.archetypeComponent[pair.second].push_back(pair.first);
 		}
 
@@ -798,7 +787,7 @@ public:
 				flecs::entity e = world.ensure(serId); 
 
 				for(u32 compId : cache.idList) {
-					deserializeRecords[compId](des, e.get_mut(af(compId)));
+					deserializeRecords[compId](des, e.get_mut(impl::af(compId)));
 				}
 			} 
 		}
@@ -826,7 +815,7 @@ public:
 				flecs::entity e = world.ensure(serId);
 
 				for(u32 compId : cache.idList) {
-					e.remove(af(compId));
+					e.remove(impl::af(compId));
 				}
 			}
 		}
@@ -844,7 +833,7 @@ public:
 				continue;
 			}
 	
-			af(serId).destruct();
+			impl::af(serId).destruct();
 		}
 
 		// Enabled entities
@@ -859,7 +848,7 @@ public:
 				continue;
 			}
 
-			af(serId).enable();
+			impl::af(serId).enable();
 		}
 
 		// Disabled entities
@@ -874,7 +863,7 @@ public:
 				continue;
 			}
 
-			af(serId).disable();
+			impl::af(serId).disable();
 		}
 	}
 
@@ -892,7 +881,7 @@ public:
 		flecs::world& world = getEntityWorld();
 
 		flecs::entity componentId = world.component<T>();
-		u32 rawId = cf(componentId);
+		u32 rawId = impl::cf(componentId);
 
 		componentId.is_a<NetworkedComponent>();
 
@@ -909,21 +898,21 @@ public:
 		allEntityManagement.push_back(
 			world.observer<T>()
 			.event(flecs::OnSet).each([rawId, this](flecs::entity e, T& comp) {
-				componentsChanged[cf(e)].push_back(rawId);
+				componentsChanged[impl::cf(e)].push_back(rawId);
 			}));
 
 		forceComponentChangeSystem.push_back(
 		world.system<T>()
 			.kind<NoPhase>()
 			.each([rawId, this](flecs::entity e, T& comp) {
-				componentsChanged[cf(e)].push_back(rawId);
+				componentsChanged[impl::cf(e)].push_back(rawId);
 			}));
 
 		allEntityManagement.push_back(
 			world.observer<T>()
 			.with<NetworkedEntity>()
 			.event(flecs::OnRemove).each([rawId, this](flecs::entity e, T& comp){
-				componentsDestroyed[cf(e)].push_back(rawId);
+				componentsDestroyed[impl::cf(e)].push_back(rawId);
 			}));
 
 		return componentId;
@@ -931,12 +920,12 @@ public:
 	
 	void enable(flecs::entity entity) {
 		entity.enable();
-		entitiesEnabled.push_back(cf(entity));
+		entitiesEnabled.push_back(impl::cf(entity));
 	}
 
 	void disable(flecs::entity entity) {
 		entity.disable();
-		entitiesDisabled.push_back(cf(entity));
+		entitiesDisabled.push_back(impl::cf(entity));
 	}
 
 	flecs::entity entity() {

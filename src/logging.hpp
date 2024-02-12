@@ -91,6 +91,13 @@ public:
 		decoratorMap[DECORATOR_CYAN]   = ANSI_CYAN;
 		decoratorMap[DECORATOR_WHITE]  = ANSI_WHITE;
 		decoratorMap[DECORATOR_RESET]  = ANSI_RESET;
+
+		logFile.open("log.ftxt");
+	}
+
+	~Logger() {
+		if(logFile.is_open())
+			logFile.close();
 	}
 
 	// Will simply print to the console
@@ -112,7 +119,7 @@ public:
 	}
 
 private:
-	int parseDecoratorSet(std::string& str, int start) {
+	int parseDecoratorSet(std::string& str, int start, bool deleteDecorator = false) {
 		std::string decorations = "";
 		
 		int startOfDecoration = start + 1;
@@ -132,18 +139,24 @@ private:
 			decorations += decoratorMap[decorationKey];
 
 		str.erase(str.begin() + start, str.begin() + i + 1);
-		str.insert(start, decorations);
-		return start + (int)decorations.size() - 1;
+		if(!deleteDecorator) {
+			str.insert(start, decorations);
+			return start + (int)decorations.size() - 1;
+		}
+
+		return start - 1;
 	}
 
-	std::string& parseForDecorators(std::string& format) {
-		for(int i = 0; i < format.size(); i++) {
-			if(format[i] == START_DECORATOR) {
-				i = parseDecoratorSet(format, i);
+	std::string parseForDecorators(const std::string& format, bool deleteDecorators = false) {
+		std::string newFormat = format;
+
+		for(int i = 0; i < newFormat.size(); i++) {
+			if(newFormat[i] == START_DECORATOR) {
+				i = parseDecoratorSet(newFormat, i, deleteDecorators);
 			}
 		}
 
-		return format;
+		return newFormat;
 	}
 
 	void _log(ErrorSeverity severity, const char* cFormat, va_list args) {
@@ -153,6 +166,8 @@ private:
 			output.insert(0, "<red, bold>Fatal Error: <reset>");
 		else if(severity == ERROR_SEVERITY_WARNING)
 			output.insert(0, "<yellow>Warning: <reset>");
+		if(logFile.is_open())
+			logFile << vformatString(parseForDecorators(output, true).c_str(), args);
 		output = vformatString(parseForDecorators(output).c_str(), args);
 
 		printf(output.c_str());
@@ -166,6 +181,7 @@ private:
 	}
 
 private:
+	std::ofstream logFile;
 	std::map<std::string, std::string> decoratorMap;
 } log;
 
