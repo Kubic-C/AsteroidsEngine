@@ -1093,6 +1093,9 @@ public:
 
 protected:
 	bool open(const SteamNetworkingIPAddr& addr, const SteamNetworkingConfigValue_t& opt) {
+		if (conn != k_HSteamNetConnection_Invalid)
+			return false;
+
 		conn = impl::getSockets()->ConnectByIPAddress(addr, 1, &opt);
 		if (conn == k_HSteamNetConnection_Invalid) {
 			log(ERROR_SEVERITY_WARNING, "Unable to open client socket");
@@ -1115,10 +1118,11 @@ protected:
 
 		connected = false;
 		impl::getSockets()->CloseConnection(conn, 0, nullptr, false);
-		conn = k_HSteamNetConnection_Invalid;
+		this->conn = k_HSteamNetConnection_Invalid;
 	}
 
 	void close() {
+		conn = k_HSteamNetConnection_Invalid;
 	}
 
 	void internalOnConnectionJoin(HSteamNetConnection conn) override {
@@ -1256,6 +1260,9 @@ public:
 	}
 protected:
 	bool open(const SteamNetworkingIPAddr& addr, const SteamNetworkingConfigValue_t& opt) {
+		if(listen != k_HSteamListenSocket_Invalid)
+			return false;
+
 		listen = impl::getSockets()->CreateListenSocketIP(addr, 1, &opt);
 		if (listen == k_HSteamListenSocket_Invalid) {
 			log(ERROR_SEVERITY_WARNING, "Unable to open listen socket");

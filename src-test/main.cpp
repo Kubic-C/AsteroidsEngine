@@ -151,7 +151,9 @@ protected:
 		addr.Clear();
 		addr.ParseString(((std::string)editBox->getText()).c_str());
 		addr.m_port = 9999;
-		networkManager.open(addr);
+		if(!networkManager.open(addr)) {
+			ae::log(ERROR_SEVERITY_WARNING, "Failed to open client\n");
+		}
 
 		self.openFailedText->setVisible(false);
 	}
