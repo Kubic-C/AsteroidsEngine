@@ -256,10 +256,10 @@ inline bool endDeserialize(Deserializer& des) {
 
 enum MessageHeader: u8 {
 	MESSAGE_HEADER_INVALID = UINT8_MAX,
-	MESSAGE_HEADER_COMPONENT_SNAPSHOT = 0,
-	MESSAGE_HEADER_ENTITY_COMPONENT_META_SNAPSHOT,
-	MESSAGE_HEADER_PHYSICS_SNAPSHOT,
-	MESSAGE_HEADER_FULL_SNAPSHOT, // A combined snapshot of component and physics snapshot
+	 MESSAGE_HEADER_COMPONENT_SNAPSHOT = 0,
+	// MESSAGE_HEADER_ENTITY_COMPONENT_META_SNAPSHOT,
+	// MESSAGE_HEADER_PHYSICS_SNAPSHOT,
+	MESSAGE_HEADER_STATE_SNAPSHOT,
 	MESSAGE_HEADER_CORE_LAST // it is named core in the case end-users also want to have multiple MessageHeader enums
 };
 
@@ -399,9 +399,9 @@ public:
 
 		int steamMessageFlags = 0;
 		if(sendReliable) {
-			steamMessageFlags = k_nSteamNetworkingSend_Reliable;
+			steamMessageFlags = k_nSteamNetworkingSend_ReliableNoNagle;
 		} else {
-			steamMessageFlags = k_nSteamNetworkingSend_Unreliable;
+			steamMessageFlags = k_nSteamNetworkingSend_UnreliableNoNagle;
 		}
 
 		EResult result = k_EResultOK;
@@ -614,7 +614,7 @@ extern flecs::world& getEntityWorld();
 struct u32Hasher {
 	std::size_t operator()(std::vector<u32> const& vec) const {
 		std::size_t seed = vec.size();
-		for (auto& i : vec) {
+		for (const auto& i : vec) {
 			seed ^= i + 0x9e3779b9 + (seed << 6) + (seed >> 2);
 		}
 		return seed;
@@ -622,7 +622,12 @@ struct u32Hasher {
 };
 
 struct NetworkedEntity {};
-struct NetworkedComponent {};
+struct NetworkedComponent {
+	virtual bool hasChanged() {
+		return false;
+	}
+};
+
 struct NoPhase {};
 
 class EntityWorldNetworkManager {
@@ -679,10 +684,15 @@ public:
 		// we are associating a set of changed components with a list of entities.
 		cache.archetypeComponent.clear();
 		for(auto& pair : componentsChanged) {
-			if(!getEntityWorld().is_alive(pair.first))
+			if(impl::af(pair.first) == 0)
 				continue;
 
-			cache.archetypeComponent[pair.second].push_back(pair.first);
+			cache.idList.clear();
+			for (auto it = pair.second.begin(); it != pair.second.end(); ) {
+				cache.idList.push_back(std::move(pair.second.extract(it++).value()));
+			}
+
+			cache.archetypeComponent[cache.idList].push_back(pair.first);
 		}
 
 		ser.object((u32)cache.archetypeComponent.size());
@@ -740,7 +750,7 @@ public:
 		// Destroyed Components
 		cache.archetypeComponent.clear();
 		for (auto& pair : componentsDestroyed) {
-			if (!getEntityWorld().is_alive(pair.first)) {
+			if (impl::af(pair.first) == 0) {
 				//std::vector<u32>::iterator foundDestroyedInEnabled = 
 				//	std::find_if(entitiesDisabled.begin(), entitiesDisabled.end(), [&](u32 id) -> bool {
 				//		return id == impl::cf(pair.first);
@@ -933,14 +943,20 @@ public:
 		allEntityManagement.push_back(
 			world.observer<T>()
 			.event(flecs::OnSet).each([rawId, this](flecs::entity e, T& comp) {
-				componentsChanged[impl::cf(e)].push_back(rawId);
+				componentsChanged[impl::cf(e)].insert(rawId);
+			}));
+
+		allEntityManagement.push_back(
+			world.observer<T>()
+			.event(flecs::OnAdd).each([rawId, this](flecs::entity e, T& comp) {
+				componentsChanged[impl::cf(e)].insert(rawId);
 			}));
 
 		forceComponentChangeSystem.push_back(
 		world.system<T>()
 			.kind<NoPhase>()
 			.each([rawId, this](flecs::entity e, T& comp) {
-				componentsChanged[impl::cf(e)].push_back(rawId);
+				componentsChanged[impl::cf(e)].insert(rawId);
 			}));
 
 		allEntityManagement.push_back(
@@ -987,11 +1003,11 @@ protected:
 	// as the capacity of both containers goes up
 	struct Cache {
 		std::vector<u32> idList;
-		std::unordered_map<std::vector<u32>, std::vector<u32>, u32Hasher> archetypeComponent;
+		std::map<std::vector<u32>, std::vector<u32>> archetypeComponent;
 	} cache;
 
 
-	std::unordered_map<u32, std::vector<u32>> componentsChanged;
+	std::unordered_map<u32, std::unordered_set<u32>> componentsChanged;
 	std::unordered_map<u32, std::vector<u32>> componentsDestroyed;
 	std::unordered_set<u32> entitiesDestroyed;
 	std::vector<u32> entitiesEnabled;
@@ -1003,6 +1019,10 @@ protected:
 // Must be defined here so it may be used with PhysicsWorldNetworkManager
 struct ShapeComponent : public NetworkedComponent {
 	u32 shape = UINT32_MAX;
+
+	bool isValid() {
+		return shape != UINT32_MAX && getPhysicsWorld().doesShapeExist(shape);
+	}
 
 	template<typename S>
 	void serialize(S& s) {
@@ -1018,7 +1038,6 @@ public:
 
 	bool isPhysicsWorldSnapshotReady() {
 		PhysicsWorld& physicsWorld = getPhysicsWorld();
-		bool needUpdate = false;
 
 		query.iter([&](flecs::iter& iter, ShapeComponent* shapesArray) {
 			for (auto i : iter) {
@@ -1027,12 +1046,11 @@ public:
 				if (shape.isNetworkDirty()) {
 					shapeUpdates[shape.getType()].push_back(shapesArray[i].shape);
 					shape.resetNetworkDirty();
-					needUpdate = true;
 				}
 			}
 			});
 
-		return needUpdate;
+		return shapeUpdates.size() > 0;
 	}
 
 	void yieldAll() {
@@ -1116,6 +1134,10 @@ private:
 
 /* Default network interfaces */
 
+extern u64 getCurrentStateId();
+extern void transitionState(u64 id, bool immediate);
+extern bool hasStateChanged();
+
 /**
  * The client interface's purpose is to connect and send/recieve messages to a server.
  */
@@ -1193,18 +1215,23 @@ protected:
 			entity.deserializeComponentSnapshot(des);
 			break;
 
-		case MESSAGE_HEADER_ENTITY_COMPONENT_META_SNAPSHOT:
+		//case MESSAGE_HEADER_ENTITY_COMPONENT_META_SNAPSHOT:
+		//	entity.deserializeEntityComponentMetaSnapshot(des);
+		//	break;
+
+		//case MESSAGE_HEADER_PHYSICS_SNAPSHOT:
+		//	physics.deserializePhysicsWorldSnapshot(des);
+		//	break;
+
+		case MESSAGE_HEADER_STATE_SNAPSHOT: {
+			u64 stateId;
+			des.object(stateId);
+			physics.deserializePhysicsWorldSnapshot(des);
 			entity.deserializeEntityComponentMetaSnapshot(des);
-			break;
 
-		case MESSAGE_HEADER_PHYSICS_SNAPSHOT:
-			physics.deserializePhysicsWorldSnapshot(des);
-			break;
+			ae::transitionState(stateId, true);
+		} break;
 
-		case MESSAGE_HEADER_FULL_SNAPSHOT:
-			physics.deserializePhysicsWorldSnapshot(des);
-			entity.deserializeComponentSnapshot(des);
-			break;
 	
 		default:
 			world.enable_range_check(true);
@@ -1234,66 +1261,42 @@ public:
 		networkUpdate.setFunction([&](float) { syncUpdate(); });
 	}
 
-	void syncUpdate() {
+	void syncUpdate(bool force = false) {
 		EntityWorldNetworkManager& worldNetworkManager = getEntityWorldNetworkManager();
 		PhysicsWorldNetworkManager& physicsWorldManager = getPhysicsWorldNetworkManager();
 		NetworkManager& networkManager = getNetworkManager();
 
-		// Physics world snapshot.
-		// Note: the physics world snapshot simply sends the vertices and radius of shapes, so it 
-		// must be reliably sent
-		if (physicsWorldManager.isPhysicsWorldSnapshotReady()) {
-			OutputBuffer message;
+		OutputBuffer message;
+		if(force ||
+			physicsWorldManager.isPhysicsWorldSnapshotReady() ||
+		    worldNetworkManager.entityComponentMetaSnapshotReady() ||
+			needStateUpdate) {
 			Serializer ser = startSerialize(message);
-			ser.object(MESSAGE_HEADER_PHYSICS_SNAPSHOT);
-			physicsWorldManager.serializePhysicsWorldSnapshot(ser);
+			ser.object(MESSAGE_HEADER_STATE_SNAPSHOT);
+			ser.object(getCurrentStateId()); // STATE ID
+			physicsWorldManager.serializePhysicsWorldSnapshot(ser); // PHYSICS
+			worldNetworkManager.serializeEntityComponentMetaSnapshot(ser); // ENTITY COMPONENT
 			endSerialize(ser, message);
 			networkManager.sendMessage(0, std::move(message), true, true);
+			needStateUpdate = false;
 		}
 
-		// Send the component update snapshot.
-		// Note: Its ok if this is unreliable.
-		if (worldNetworkManager.componentSnapshotReady()) {
-			OutputBuffer message;
-			Serializer ser = startSerialize(message);
+		if(force ||
+			worldNetworkManager.componentSnapshotReady()) {
+			Serializer ser = startSerialize(message); // if you see here a warning here ignore it.
 			ser.object(MESSAGE_HEADER_COMPONENT_SNAPSHOT);
-			worldNetworkManager.serializeComponentSnapshot(ser);
+			worldNetworkManager.serializeComponentSnapshot(ser); // COMPONENT
 			endSerialize(ser, message);
 			networkManager.sendMessage(0, std::move(message), true);
-		}
-
-		// Send entity component meta data snapshot. 
-		// Note: Must be reliably sent.
-		if (worldNetworkManager.entityComponentMetaSnapshotReady()) {
-			OutputBuffer message;
-			Serializer ser = startSerialize(message);
-			ser.object(MESSAGE_HEADER_ENTITY_COMPONENT_META_SNAPSHOT);
-			worldNetworkManager.serializeEntityComponentMetaSnapshot(ser);
-			endSerialize(ser, message);
-			networkManager.sendMessage(0, std::move(message), true, true);
 		}
 	}
 
 	// Refer to NetworkManager::sendMessage() for param info
 	// sends a full snapshot to the selected connection or all.
 	void fullSyncUpdate(HSteamNetConnection who, bool sendAll = false) {
-		EntityWorldNetworkManager& worldNetworkManager = getEntityWorldNetworkManager();
-		PhysicsWorldNetworkManager& physicsWorldManager = getPhysicsWorldNetworkManager();
-		NetworkManager& networkManager = getNetworkManager();
-		OutputBuffer message;
-		
-		physicsWorldManager.yieldAll();
-		worldNetworkManager.yeildAllComponenents();
-
-		{
-			Serializer ser = startSerialize(message);
-			ser.object(MESSAGE_HEADER_FULL_SNAPSHOT);
-			physicsWorldManager.serializePhysicsWorldSnapshot(ser);
-			worldNetworkManager.serializeComponentSnapshot(ser);
-			endSerialize(ser, message);
-			networkManager.sendMessage(who, std::move(message), sendAll, true);
-		}
-
+		getEntityWorldNetworkManager().yeildAllComponenents();
+		getPhysicsWorldNetworkManager().yieldAll();
+		syncUpdate(true); 
 	}
 
 	// sets the amount of network updates (flecs::world entity syncing and such)
@@ -1336,6 +1339,9 @@ protected:
 	}
 
 	void _internalUpdate() override {
+		if(hasStateChanged())
+			needStateUpdate = true;
+
 		networkUpdate.update();
 	}
 
@@ -1343,6 +1349,7 @@ protected:
 	HSteamListenSocket listen = k_HSteamListenSocket_Invalid;
 
 private:
+	bool needStateUpdate = false;
 	Ticker<void(float)> networkUpdate;
 };
 

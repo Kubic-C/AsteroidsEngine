@@ -57,12 +57,14 @@ void registerNetworkInterfaceStateModule() {
 	impl::_registerNetworkStateModule(module, std::type_index(typeid(NetworkInterfaceType)), getStateId<StateType>());
 }
 
-void transitionState(u64 stateId);
+void transitionState(u64 stateId, bool immediate = false);
 
 template<typename T>
-void transitionState() {
-	transitionState(getStateId<T>());
+void transitionState(bool immediate = false) {
+	transitionState(getStateId<T>(), immediate);
 }
+
+bool hasStateChanged();
 
 void setWindow(std::shared_ptr<sf::RenderWindow> window);
 

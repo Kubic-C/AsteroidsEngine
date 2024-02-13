@@ -124,6 +124,8 @@ namespace impl {
         for (auto i : iter) {
             TransformComponent& transform = transforms[i];
             u32 shapeId = shapes[i].shape;
+            if(!shapes[i].isValid())
+                continue;
 
             Shape& shape = world.getShape(shapeId);
 
@@ -177,6 +179,9 @@ namespace impl {
 
         for (auto i : iter) {
             u32 shapeId = shapes[i].shape;
+            if (!shapes[i].isValid())
+                continue;
+
             Shape& shape = world.getShape(shapeId);
             AABB aabb = shape.getAABB();
 
@@ -208,6 +213,8 @@ namespace impl {
         for (auto i : iter) {
             TransformComponent& transform = transforms[i];
             u32 shapeId = shapes[i].shape;
+            if (!shapes[i].isValid())
+                continue;
 
             Shape& shape = world.getShape(shapeId);
 
@@ -229,7 +236,7 @@ namespace impl {
         PhysicsWorld& world = getPhysicsWorld();
 
         for (auto i : iter) {
-            if (shapes[i].shape != PhysicsWorld::invalidId) {
+            if (shapes[i].isValid()) {
                 world.eraseShape(shapes[i].shape);
                 shapes[i].shape = PhysicsWorld::invalidId;
             }

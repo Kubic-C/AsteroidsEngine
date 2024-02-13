@@ -24,7 +24,8 @@ struct Engine {
 	std::shared_ptr<PhysicsWorldNetworkManager> physicsWorldNetwork;
 	std::unordered_map<u64, StateInfo> states;
 	u64 activeState;
-	u64 nextActiveState = UINT64_MAX;
+	u64 nextActiveState;
+	bool stateChanged;
 };
 
 Engine* engine = nullptr; 
@@ -68,6 +69,7 @@ namespace impl {
 		prevState.state->getModule().disable();
 		prevState.state->onLeave();
 		engine->activeState = stateId;
+		engine->stateChanged = true;
 		nextState.state->onEntry();
 		nextState.state->getModule().enable();
 
@@ -83,6 +85,10 @@ namespace impl {
 			if (nextState.networkModules.find(id) != nextState.networkModules.end()) {
 				nextState.networkModules[id].enable();
 			}
+
+			// Some interface network code such as sync updates may need to know if state has changed
+			interface._internalUpdate();
+			interface.update();
 		}
 	}
 
@@ -126,6 +132,7 @@ namespace impl {
 		engine->states[engine->activeState].state->onTick(deltaTime);
 		engine->entityWorld.progress(deltaTime);	
 
+		engine->stateChanged = false; // reset the state changed tick before transition (if we do transition)
 		if(engine->nextActiveState != UINT64_MAX) {
 			::ae::impl::transitionState(engine->nextActiveState);
 			engine->nextActiveState = UINT64_MAX;
@@ -149,6 +156,9 @@ void init() {
 	engine->entityWorldNetwork = std::make_shared<EntityWorldNetworkManager>();
 	CoreModule::registerCore();
 
+	int32_t maxMessageSize = 1000000; // 1 mega byte
+	engine->util->SetConfigValue(k_ESteamNetworkingConfig_SendBufferSize, k_ESteamNetworkingConfig_Global, 0,  k_ESteamNetworkingConfig_Int32, &maxMessageSize);
+
 	// Time
 	engine->ticker.setRate(60.0f);
 	engine->ticker.setFunction(impl::tick);
@@ -166,6 +176,7 @@ void init() {
 	// State
 	u64 unknownStateId = registerState<UnknownState, UnknownModule>();
 	engine->activeState = unknownStateId;
+	engine->stateChanged = false;
 }
 
 NetworkManager& getNetworkManager() {
@@ -200,8 +211,17 @@ u64 getCurrentStateId() {
 	return engine->activeState;
 }
 
-void transitionState(u64 id) {
+void transitionState(u64 id, bool immediate) {
+	if(immediate && !getEntityWorld().is_deferred()) {
+		impl::transitionState(id);
+		return;
+	}
+
 	engine->nextActiveState = id;
+}
+
+bool hasStateChanged() {
+	return engine->stateChanged;
 }
 
 void setWindow(std::shared_ptr<sf::RenderWindow> window) {
