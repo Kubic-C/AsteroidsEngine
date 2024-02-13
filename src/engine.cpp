@@ -140,6 +140,10 @@ namespace impl {
 	}
 }
 
+void setGlobalNetworkingConfig(ESteamNetworkingConfigValue config, ESteamNetworkingConfigDataType type, const void* data) {
+	engine->util->SetConfigValue(config, k_ESteamNetworkingConfig_Global, 0, type, data);
+}
+
 void init() {
 	if(engine)
 		log(ERROR_SEVERITY_FATAL, "Engine already initialized\n");
@@ -158,6 +162,38 @@ void init() {
 
 	int32_t maxMessageSize = 1000000; // 1 mega byte
 	engine->util->SetConfigValue(k_ESteamNetworkingConfig_SendBufferSize, k_ESteamNetworkingConfig_Global, 0,  k_ESteamNetworkingConfig_Int32, &maxMessageSize);
+
+	// For testing the network :)
+	float FakePacketLoss_Send      = 0;
+	float FakePacketLoss_Recv      = 0;
+	i32   FakePacketLag_Send       = 0;
+	i32   FakePacketLag_Recv       = 0;
+	float FakePacketReorder_Send   = 0;
+	float FakePacketReorder_Recv   = 0;
+	i32   FakePacketReorder_Time   = 0;
+	float FakePacketDup_Send       = 0;
+	float FakePacketDup_Recv       = 0;
+	i32   FakePacketDup_TimeMax    = 0;
+	i32   PacketTraceMaxBytes      = 0;
+	i32   FakeRateLimit_Send_Rate  = 0;
+	i32   FakeRateLimit_Send_Burst = 0;
+	i32   FakeRateLimit_Recv_Rate  = 0;
+	i32   FakeRateLimit_Recv_Burst = 0;
+	setGlobalNetworkingConfig(k_ESteamNetworkingConfig_FakePacketLoss_Send,      k_ESteamNetworkingConfig_Float, &FakePacketLoss_Send);
+	setGlobalNetworkingConfig(k_ESteamNetworkingConfig_FakePacketLoss_Recv,      k_ESteamNetworkingConfig_Float, &FakePacketLoss_Recv);
+	setGlobalNetworkingConfig(k_ESteamNetworkingConfig_FakePacketLag_Send,       k_ESteamNetworkingConfig_Int32, &FakePacketLag_Send);
+	setGlobalNetworkingConfig(k_ESteamNetworkingConfig_FakePacketLag_Recv,       k_ESteamNetworkingConfig_Int32, &FakePacketLag_Recv);
+	setGlobalNetworkingConfig(k_ESteamNetworkingConfig_FakePacketReorder_Send,   k_ESteamNetworkingConfig_Float, &FakePacketReorder_Send);
+	setGlobalNetworkingConfig(k_ESteamNetworkingConfig_FakePacketReorder_Recv,   k_ESteamNetworkingConfig_Float, &FakePacketReorder_Recv);
+	setGlobalNetworkingConfig(k_ESteamNetworkingConfig_FakePacketReorder_Time,   k_ESteamNetworkingConfig_Int32, &FakePacketReorder_Time);
+	setGlobalNetworkingConfig(k_ESteamNetworkingConfig_FakePacketDup_Send,       k_ESteamNetworkingConfig_Float, &FakePacketDup_Send);
+	setGlobalNetworkingConfig(k_ESteamNetworkingConfig_FakePacketDup_Recv,       k_ESteamNetworkingConfig_Float, &FakePacketDup_Recv);
+	setGlobalNetworkingConfig(k_ESteamNetworkingConfig_FakePacketDup_TimeMax,    k_ESteamNetworkingConfig_Int32, &FakePacketDup_TimeMax);
+	setGlobalNetworkingConfig(k_ESteamNetworkingConfig_PacketTraceMaxBytes,      k_ESteamNetworkingConfig_Int32, &PacketTraceMaxBytes);
+	setGlobalNetworkingConfig(k_ESteamNetworkingConfig_FakeRateLimit_Send_Rate,  k_ESteamNetworkingConfig_Int32, &FakeRateLimit_Send_Rate);
+	setGlobalNetworkingConfig(k_ESteamNetworkingConfig_FakeRateLimit_Send_Burst, k_ESteamNetworkingConfig_Int32, &FakeRateLimit_Send_Burst);
+	setGlobalNetworkingConfig(k_ESteamNetworkingConfig_FakeRateLimit_Recv_Rate,  k_ESteamNetworkingConfig_Int32, &FakeRateLimit_Recv_Rate);
+	setGlobalNetworkingConfig(k_ESteamNetworkingConfig_FakeRateLimit_Recv_Burst, k_ESteamNetworkingConfig_Int32, &FakeRateLimit_Recv_Burst);
 
 	// Time
 	engine->ticker.setRate(60.0f);
