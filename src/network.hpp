@@ -404,6 +404,7 @@ public:
 			steamMessageFlags = k_nSteamNetworkingSend_Unreliable;
 		}
 
+		EResult result = k_EResultOK;
 		if(sendAll) {
 
 			// MessageBufferMeta will keep track how many messages
@@ -452,13 +453,28 @@ public:
 			if(networkingMessages.empty())
 				return;
 
-			impl::getSockets()->SendMessages((int)networkingMessages.size(), networkingMessages.data(), nullptr);
+			std::vector<int64_t> results;
+			results.resize(networkingMessages.size());
+
+			impl::getSockets()->SendMessages((int)networkingMessages.size(), networkingMessages.data(), results.data());
 			networkingMessages.clear();
+		
+			for(int64_t messageResult : results) {
+				if(messageResult < 0) {
+					result = (EResult)-messageResult;
+					break;
+				}
+			}
+		
 		} else {
 			if(connections.find(who) == connections.end())
 				log(ERROR_SEVERITY_FATAL, "Cannot send a message to an invalid connection: %u\n", who);
 
-			impl::getSockets()->SendMessageToConnection(who, messageBuffer.getData(), (u32)messageBuffer.getSize(), steamMessageFlags, nullptr);
+			result = impl::getSockets()->SendMessageToConnection(who, messageBuffer.getData(), (u32)messageBuffer.getSize(), steamMessageFlags, nullptr);
+		}
+
+		if(result != k_EResultOK) {
+			log(ERROR_SEVERITY_WARNING, "Failed to send message: %i\n", result);
 		}
 	}
 
@@ -672,7 +688,11 @@ public:
 		ser.object((u32)cache.archetypeComponent.size());
 		for(std::pair<const std::vector<u32>, std::vector<u32>>& pair : cache.archetypeComponent) {
 			// Serialize the order of components
-			ser.container(pair.first, UINT32_MAX);
+			const std::vector<u32>& componentTypes = pair.first;
+			ser.object((u32)componentTypes.size()); // entity component type count
+			for (u32 i = 0; i < componentTypes.size(); i++) { // entity component types
+				ser.object(componentTypes[i]);
+			}
 
 			// Then serialize all entity-components
 			ser.object((u32)pair.second.size());
@@ -720,8 +740,18 @@ public:
 		// Destroyed Components
 		cache.archetypeComponent.clear();
 		for (auto& pair : componentsDestroyed) {
-			if (!getEntityWorld().is_alive(pair.first))
+			if (!getEntityWorld().is_alive(pair.first)) {
+				//std::vector<u32>::iterator foundDestroyedInEnabled = 
+				//	std::find_if(entitiesDisabled.begin(), entitiesDisabled.end(), [&](u32 id) -> bool {
+				//		return id == impl::cf(pair.first);
+				//	});
+				//std::vector<u32>::iterator foundDestroyedInDisabled =
+				//	std::find_if(entitiesDisabled.begin(), entitiesDisabled.end(), [&](u32 id) -> bool {
+				//		return id == impl::cf(pair.first);
+				//	});
+
 				continue;
+			}
 
 			cache.archetypeComponent[pair.second].push_back(pair.first);
 		}
@@ -776,7 +806,13 @@ public:
 		for(u32 i = 0; i < archetypeCount; i++) {
 			// Getting id list of components
 			cache.idList.clear();
-			des.container(cache.idList, UINT32_MAX);
+			u32 idListSize;
+			des.object(idListSize);
+			cache.idList.resize(idListSize);
+			for (u32 compI = 0; compI < idListSize; compI++) { // entity component types
+				des.object(cache.idList[compI]);
+			}
+
 
 			// Now deserializing all the entity-component data
 			u32 entityCount;
@@ -784,7 +820,7 @@ public:
 			for(u32 entityI = 0; entityI < entityCount; entityI++) {
 				u32 serId;
 				des.object(serId);
-				flecs::entity e = world.ensure(serId); 
+				flecs::entity e = world.ensure(serId).add<NetworkedEntity>(); 
 
 				for(u32 compId : cache.idList) {
 					deserializeRecords[compId](des, e.get_mut(impl::af(compId)));
@@ -829,7 +865,6 @@ public:
 			des.object(serId);
 
 			if(!world.is_alive(serId)) {
-				log(ERROR_SEVERITY_WARNING, "Possible dsync: recieved EntityComponentSnapshot contained entity that ws not alive: %u", serId);
 				continue;
 			}
 	
@@ -844,7 +879,7 @@ public:
 			des.object(serId);
 
 			if (!world.is_alive(serId)) {
-				log(ERROR_SEVERITY_WARNING, "Possible dsync: recieved EntityComponentSnapshot contained entity that ws not alive: %u", serId);
+				log(ERROR_SEVERITY_WARNING, "Possible dsync: recieved enabledEntities contained entity that ws not alive: %u\n", serId);
 				continue;
 			}
 
@@ -859,7 +894,7 @@ public:
 			des.object(serId);
 
 			if (!world.is_alive(serId)) {
-				log(ERROR_SEVERITY_WARNING, "Possible dsync: recieved EntityComponentSnapshot contained entity that ws not alive: %u", serId);
+				log(ERROR_SEVERITY_WARNING, "Possible dsync: recieved disabledEntites contained entity that ws not alive: %u\n", serId);
 				continue;
 			}
 

@@ -470,7 +470,10 @@ inline bool testCollision(Circle& circle1, Circle& circle2, CollisionManifold& m
 	float length = dir.length();
 
 	if (total_radius > length) {
-		manifold.normal = dir.normalized();
+		if(dir.x == 0.0f && dir.y == 0.0f)
+			manifold.normal = {0.0f, 1.0f};
+		else
+			manifold.normal = dir.normalized();
 		manifold.depth = total_radius - length;
 		return true;
 	}
