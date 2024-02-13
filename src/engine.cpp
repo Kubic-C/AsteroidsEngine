@@ -24,6 +24,7 @@ struct Engine {
 	std::shared_ptr<PhysicsWorldNetworkManager> physicsWorldNetwork;
 	std::unordered_map<u64, StateInfo> states;
 	u64 activeState;
+	u64 nextActiveState = UINT64_MAX;
 };
 
 Engine* engine = nullptr; 
@@ -50,6 +51,39 @@ namespace impl {
 			log(ERROR_SEVERITY_FATAL, "Cannot register Network State Module if the state is not already registered");
 
 		engine->states[stateId].networkModules[networkInterfaceId] = module;
+	}
+
+	void transitionState(u64 stateId) {
+		if (!impl::validState(stateId)) {
+			log(ERROR_SEVERITY_WARNING, "Attempted to transition to a invalid state: %u\n", stateId);
+			return;
+		}
+
+		if (stateId == engine->activeState)
+			return;
+
+		StateInfo& prevState = engine->states[engine->activeState];
+		StateInfo& nextState = engine->states[stateId];
+
+		prevState.state->getModule().disable();
+		prevState.state->onLeave();
+		engine->activeState = stateId;
+		nextState.state->onEntry();
+		nextState.state->getModule().enable();
+
+		// enable NetworkStateModules
+		NetworkManager& networkManager = *engine->networkManager;
+		if (networkManager.hasNetworkInterface()) {
+			NetworkInterface& interface = networkManager.getNetworkInterface();
+			std::type_index id = std::type_index(typeid(interface));
+
+			if (prevState.networkModules.find(id) != prevState.networkModules.end()) {
+				prevState.networkModules[id].disable();
+			}
+			if (nextState.networkModules.find(id) != nextState.networkModules.end()) {
+				nextState.networkModules[id].enable();
+			}
+		}
 	}
 
 	bool shouldExit() {
@@ -91,6 +125,11 @@ namespace impl {
 	void tick(float deltaTime) {
 		engine->states[engine->activeState].state->onTick(deltaTime);
 		engine->entityWorld.progress(deltaTime);	
+
+		if(engine->nextActiveState != UINT64_MAX) {
+			::ae::impl::transitionState(engine->nextActiveState);
+			engine->nextActiveState = UINT64_MAX;
+		}
 	}
 }
 
@@ -161,37 +200,8 @@ u64 getCurrentStateId() {
 	return engine->activeState;
 }
 
-void transitionState(u64 stateId) {
-	if(!impl::validState(stateId)) {
-		log(ERROR_SEVERITY_WARNING, "Attempted to transition to a invalid state: %u\n", stateId);
-		return;
-	}
-
-	if(stateId == engine->activeState)
-		return;
-	
-	StateInfo& prevState = engine->states[engine->activeState];
-	StateInfo& nextState = engine->states[stateId];
-
-	prevState.state->getModule().disable();
-	prevState.state->onLeave();
-	engine->activeState = stateId;
-	nextState.state->onEntry();
-	nextState.state->getModule().enable();
-	
-	// enable NetworkStateModules
-	NetworkManager& networkManager = *engine->networkManager;
-	if(networkManager.hasNetworkInterface()) {
-		NetworkInterface& interface = networkManager.getNetworkInterface();
-		std::type_index id = std::type_index(typeid(interface));
-
-		if(prevState.networkModules.find(id) != prevState.networkModules.end()) {
-			prevState.networkModules[id].disable();
-		}
-		if (nextState.networkModules.find(id) != nextState.networkModules.end()) {
-			nextState.networkModules[id].enable();
-		}
-	}
+void transitionState(u64 id) {
+	engine->nextActiveState = id;
 }
 
 void setWindow(std::shared_ptr<sf::RenderWindow> window) {
