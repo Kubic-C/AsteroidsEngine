@@ -10,4 +10,3 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/game")
 
 add_subdirectory(deps)
 add_subdirectory(src)
-add_subdirectory(src-test)

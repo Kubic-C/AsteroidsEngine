@@ -1,5 +1,4 @@
-#include <iostream>
-#include "entry.hpp"
+#include <asteroids/asteroids.hpp>
 
 using namespace ae;
 
