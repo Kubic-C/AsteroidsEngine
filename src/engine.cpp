@@ -163,17 +163,18 @@ void init() {
 	int32_t maxMessageSize = 1000000; // 1 mega byte
 	engine->util->SetConfigValue(k_ESteamNetworkingConfig_SendBufferSize, k_ESteamNetworkingConfig_Global, 0,  k_ESteamNetworkingConfig_Int32, &maxMessageSize);
 
+#ifndef NDEBUG
 	// For testing the network :)
-	float FakePacketLoss_Send      = 0;
-	float FakePacketLoss_Recv      = 0;
-	i32   FakePacketLag_Send       = 0;
-	i32   FakePacketLag_Recv       = 0;
-	float FakePacketReorder_Send   = 0;
-	float FakePacketReorder_Recv   = 0;
+	float FakePacketLoss_Send      = 5;
+	float FakePacketLoss_Recv      = 5;
+	i32   FakePacketLag_Send       = 10;
+	i32   FakePacketLag_Recv       = 10;
+	float FakePacketReorder_Send   = 20;
+	float FakePacketReorder_Recv   = 20;
 	i32   FakePacketReorder_Time   = 0;
-	float FakePacketDup_Send       = 0;
-	float FakePacketDup_Recv       = 0;
-	i32   FakePacketDup_TimeMax    = 0;
+	float FakePacketDup_Send       = 10;
+	float FakePacketDup_Recv       = 10;
+	i32   FakePacketDup_TimeMax    = 5;
 	i32   PacketTraceMaxBytes      = 0;
 	i32   FakeRateLimit_Send_Rate  = 0;
 	i32   FakeRateLimit_Send_Burst = 0;
@@ -194,6 +195,7 @@ void init() {
 	setGlobalNetworkingConfig(k_ESteamNetworkingConfig_FakeRateLimit_Send_Burst, k_ESteamNetworkingConfig_Int32, &FakeRateLimit_Send_Burst);
 	setGlobalNetworkingConfig(k_ESteamNetworkingConfig_FakeRateLimit_Recv_Rate,  k_ESteamNetworkingConfig_Int32, &FakeRateLimit_Recv_Rate);
 	setGlobalNetworkingConfig(k_ESteamNetworkingConfig_FakeRateLimit_Recv_Burst, k_ESteamNetworkingConfig_Int32, &FakeRateLimit_Recv_Burst);
+#endif
 
 	// Time
 	engine->ticker.setRate(60.0f);

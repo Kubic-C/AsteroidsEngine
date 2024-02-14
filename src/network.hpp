@@ -96,11 +96,12 @@ public:
 		// if the requested size is more then the current capacity
 		// resize to match it and copy over old data
 		if (newSize > capacity) {
+			size_t newCapacity = newSize * 2;
 			u8* oldData = data;
-			data = new u8[newSize];
+			data = new u8[newCapacity];
 
 			memcpy(data, oldData, size);
-			capacity = newSize;
+			capacity = newCapacity;
 			size = newSize;
 			delete[] oldData;
 		}
@@ -399,9 +400,9 @@ public:
 
 		int steamMessageFlags = 0;
 		if(sendReliable) {
-			steamMessageFlags = k_nSteamNetworkingSend_ReliableNoNagle;
+			steamMessageFlags = k_nSteamNetworkingSend_Reliable | k_nSteamNetworkingSend_AutoRestartBrokenSession;
 		} else {
-			steamMessageFlags = k_nSteamNetworkingSend_UnreliableNoNagle;
+			steamMessageFlags = k_nSteamNetworkingSend_Unreliable;
 		}
 
 		EResult result = k_EResultOK;
@@ -622,10 +623,14 @@ struct u32Hasher {
 };
 
 struct NetworkedEntity {};
-struct NetworkedComponent {
-	virtual bool hasChanged() {
-		return false;
-	}
+struct NetworkedComponent {};
+
+enum class ComponentPiority {
+	// Connected clients are ensured to recieve the updates of this component
+	High,
+	// Connected clients are NOT ensured to recieve the updates of this component. 
+	// Component update could be lost due to packet loss.
+	Low 
 };
 
 struct NoPhase {};
@@ -637,6 +642,7 @@ public:
 
 		world.component<NetworkedEntity>();
 		world.component<NetworkedComponent>();
+		world.add<ae::NetworkedEntity>(); // entity world should be Networked by default.
 
 		allEntityManagement.push_back(
 			world.observer()
@@ -656,69 +662,27 @@ public:
 		}
 	}
 
-	bool componentSnapshotReady() {
-		return (bool)componentsChanged.size();
+	void serializeHighPiorityComponentUpdates(Serializer& ser) {
+		serializeComponentSnapshot(highPiorityComponentsUpdates, ser);
 	}
 
-	bool entityComponentMetaSnapshotReady() {
+	void serializeLowPiorityComponentUpdates(Serializer& ser) {
+		serializeComponentSnapshot(lowPiorityComponentsUpdates, ser);
+	}
+
+	bool isHighPiorityComponentSnapshotReady() {
+		return highPiorityComponentsUpdates.size();
+	}
+
+	bool isLowPiorityComponentSnapshotReady() {
+		return lowPiorityComponentsUpdates.size();
+	}
+
+	bool isEntityComponentMetaSnapshotReady() {
 		return (bool)componentsDestroyed.size() ||
 			   (bool)entitiesDestroyed.size() ||
 			   (bool)entitiesEnabled.size() ||
 			   (bool)entitiesDisabled.size();
-	}
-
-	void serializeComponentSnapshot(Serializer& ser) {
-		flecs::world& world = getEntityWorld();
-
-		if(world.is_deferred())
-			log(ERROR_SEVERITY_FATAL, "World must not be in deferred mode when calling serializeComponentSnapshot");
-
-		// Note:
-		// Component updates are in a seperate function because they make the size of messages incredibily large
-		// so to avoid lag we seperate EntityComponentMeta updates and ComponentChanged updates.
-
-		// Must serialize: 
-		//	- Components changed
-
-		// Instead of associating entities with their changed components
-		// we are associating a set of changed components with a list of entities.
-		cache.archetypeComponent.clear();
-		for(auto& pair : componentsChanged) {
-			if(impl::af(pair.first) == 0)
-				continue;
-
-			cache.idList.clear();
-			for (auto it = pair.second.begin(); it != pair.second.end(); ) {
-				cache.idList.push_back(std::move(pair.second.extract(it++).value()));
-			}
-
-			cache.archetypeComponent[cache.idList].push_back(pair.first);
-		}
-
-		ser.object((u32)cache.archetypeComponent.size());
-		for(std::pair<const std::vector<u32>, std::vector<u32>>& pair : cache.archetypeComponent) {
-			// Serialize the order of components
-			const std::vector<u32>& componentTypes = pair.first;
-			ser.object((u32)componentTypes.size()); // entity component type count
-			for (u32 i = 0; i < componentTypes.size(); i++) { // entity component types
-				ser.object(componentTypes[i]);
-			}
-
-			// Then serialize all entity-components
-			ser.object((u32)pair.second.size());
-			for(u32 entityId : pair.second) {
-				ser.object(entityId);
-				
-				for(u32 compId : pair.first) {
-					flecs::entity entity = impl::af(entityId);
-					flecs::entity component = impl::af(compId);
-
-					serializeRecords[compId](ser, entity.get_mut(component));
-				}
-			}
-		}
-
-		componentsChanged.clear();
 	}
 
 	void serializeEntityComponentMetaSnapshot(Serializer& ser) {
@@ -742,24 +706,38 @@ public:
 		//	No I dont think I will.
 
 		// Must serialize: 
+		//  - Created Components
 		//	- Destroyed Components
 		//  - Destroyed entities
 		//  - Enabled entities
 		//  - Disabled entities
 
+		// Created Components
+		cache.archetypeComponent.clear();
+		for (auto& pair : componentsCreated) {
+			if (impl::af(pair.first) == 0) {
+				continue;
+			}
+
+			cache.archetypeComponent[pair.second].push_back(pair.first);
+		}
+
+		ser.object((u32)cache.archetypeComponent.size());
+		for (std::pair<const std::vector<u32>, std::vector<u32>>& pair : cache.archetypeComponent) {
+			// Serialize the order of components
+			ser.container(pair.first, UINT32_MAX);
+
+			// Then serialize all entity-components
+			ser.object((u32)pair.second.size());
+			for (u32 entityId : pair.second) {
+				ser.object(entityId);
+			}
+		}
+
 		// Destroyed Components
 		cache.archetypeComponent.clear();
 		for (auto& pair : componentsDestroyed) {
 			if (impl::af(pair.first) == 0) {
-				//std::vector<u32>::iterator foundDestroyedInEnabled = 
-				//	std::find_if(entitiesDisabled.begin(), entitiesDisabled.end(), [&](u32 id) -> bool {
-				//		return id == impl::cf(pair.first);
-				//	});
-				//std::vector<u32>::iterator foundDestroyedInDisabled =
-				//	std::find_if(entitiesDisabled.begin(), entitiesDisabled.end(), [&](u32 id) -> bool {
-				//		return id == impl::cf(pair.first);
-				//	});
-
 				continue;
 			}
 
@@ -799,6 +777,8 @@ public:
 			ser.object(id);
 		}
 
+		// very important to make sure we don't forget to clear these!
+		componentsCreated.clear();
 		componentsDestroyed.clear();
 		entitiesDestroyed.clear();
 		entitiesEnabled.clear();
@@ -845,7 +825,31 @@ public:
 		if (world.is_deferred())
 			log(ERROR_SEVERITY_FATAL, "World must not be in deferred mode when calling deserializeEntityComponentMetaSnapshot");
 
+		// Created Components
+
 		u32 archetypeCount = 0;
+		des.object(archetypeCount);
+		for (u32 i = 0; i < archetypeCount; i++) {
+			// Serialize the order of components
+			cache.idList.clear();
+			des.container(cache.idList, UINT32_MAX);
+
+			// Then serialize all entity-components
+			u32 entityCount;
+			des.object(entityCount);
+			for (u32 entityI = 0; entityI < entityCount; entityI++) {
+				u32 serId;
+				des.object(serId);
+				flecs::entity e = world.ensure(serId);
+
+				for (u32 compId : cache.idList) {
+					e.add(impl::af(compId));
+				}
+			}
+		}
+
+		// Destroyed Components
+
 		des.object(archetypeCount);
 		for (u32 i = 0; i < archetypeCount; i++) {
 			// Serialize the order of components
@@ -915,14 +919,14 @@ public:
 	// this will force a component update, meaning all networked components of all networked entities
 	// will be put a single component update. When serializeComponentSnapshot() is called expect lag.
 	void yeildAllComponenents() {
-		componentsChanged.clear();
+		highPiorityComponentsUpdates.clear();
 		for(flecs::system sys : forceComponentChangeSystem) {
 			sys.run();
 		}
 	}
 
 	template<typename T>
-	flecs::entity registerComponent() {
+	flecs::entity registerComponent(ComponentPiority piority = ComponentPiority::Low) {
 		flecs::world& world = getEntityWorld();
 
 		flecs::entity componentId = world.component<T>();
@@ -940,23 +944,43 @@ public:
 				des.object(*(T*)data);
 			};
 
-		allEntityManagement.push_back(
-			world.observer<T>()
-			.event(flecs::OnSet).each([rawId, this](flecs::entity e, T& comp) {
-				componentsChanged[impl::cf(e)].insert(rawId);
-			}));
+		if(piority == ComponentPiority::Low) {
+			allEntityManagement.push_back(
+				world.observer<T>()
+				.event(flecs::OnSet).each([rawId, this](flecs::entity e, T& comp) {
+					lowPiorityComponentsUpdates[impl::cf(e)].insert(rawId);
+				}));
 
-		allEntityManagement.push_back(
-			world.observer<T>()
-			.event(flecs::OnAdd).each([rawId, this](flecs::entity e, T& comp) {
-				componentsChanged[impl::cf(e)].insert(rawId);
-			}));
+			allEntityManagement.push_back(
+				world.observer<T>()
+				.event(flecs::OnAdd).each([rawId, this](flecs::entity e, T& comp) {
+					lowPiorityComponentsUpdates[impl::cf(e)].insert(rawId);
+				}));
+		} else {
+			allEntityManagement.push_back(
+				world.observer<T>()
+				.event(flecs::OnSet).each([rawId, this](flecs::entity e, T& comp) {
+					highPiorityComponentsUpdates[impl::cf(e)].insert(rawId);
+				}));
+
+			allEntityManagement.push_back(
+				world.observer<T>()
+				.event(flecs::OnAdd).each([rawId, this](flecs::entity e, T& comp) {
+					highPiorityComponentsUpdates[impl::cf(e)].insert(rawId);
+				}));
+		}
 
 		forceComponentChangeSystem.push_back(
 		world.system<T>()
 			.kind<NoPhase>()
 			.each([rawId, this](flecs::entity e, T& comp) {
-				componentsChanged[impl::cf(e)].insert(rawId);
+				highPiorityComponentsUpdates[impl::cf(e)].insert(rawId);
+			}));
+
+		allEntityManagement.push_back(
+			world.observer<T>()
+			.event(flecs::OnAdd).each([rawId, this](flecs::entity e, T&) {
+				componentsCreated[impl::cf(e)].push_back(rawId);
 			}));
 
 		allEntityManagement.push_back(
@@ -984,20 +1008,59 @@ public:
 	}
 
 protected:
-	void clearAll() {
+	void serializeComponentSnapshot(std::unordered_map<u32, std::unordered_set<u32>>& componentsChanged, Serializer& ser) {
+		flecs::world& world = getEntityWorld();
+
+		if (world.is_deferred())
+			log(ERROR_SEVERITY_FATAL, "World must not be in deferred mode when calling serializeComponentSnapshot");
+
+		// Note:
+		// Component updates are in a seperate function because they make the size of messages incredibily large
+		// so to avoid lag we seperate EntityComponentMeta updates and ComponentChanged updates.
+
+		// Must serialize: 
+		//	- Components changed
+
+		// Instead of associating entities with their changed components
+		// we are associating a set of changed components with a list of entities.
+		cache.archetypeComponent.clear();
+		for (auto& pair : componentsChanged) {
+			if (impl::af(pair.first) == 0)
+				continue;
+
+			cache.idList.clear();
+			for (auto it = pair.second.begin(); it != pair.second.end(); ) {
+				cache.idList.push_back(std::move(pair.second.extract(it++).value()));
+			}
+
+			cache.archetypeComponent[cache.idList].push_back(pair.first);
+		}
+
+		ser.object((u32)cache.archetypeComponent.size());
+		for (std::pair<const std::vector<u32>, std::vector<u32>>& pair : cache.archetypeComponent) {
+			// Serialize the order of components
+			const std::vector<u32>& componentTypes = pair.first;
+			ser.object((u32)componentTypes.size()); // entity component type count
+			for (u32 i = 0; i < componentTypes.size(); i++) { // entity component types
+				ser.object(componentTypes[i]);
+			}
+
+			// Then serialize all entity-components
+			ser.object((u32)pair.second.size());
+			for (u32 entityId : pair.second) {
+				ser.object(entityId);
+
+				for (u32 compId : pair.first) {
+					flecs::entity entity = impl::af(entityId);
+					flecs::entity component = impl::af(compId);
+
+					serializeRecords[compId](ser, entity.get_mut(component));
+				}
+			}
+		}
+
 		componentsChanged.clear();
-		componentsDestroyed.clear();
-		entitiesDestroyed.clear();
-		entitiesEnabled.clear();
-		entitiesDisabled.clear();
 	}
-
-protected:
-	std::vector<flecs::entity> allEntityManagement;
-	std::vector<flecs::system> forceComponentChangeSystem;
-
-	std::unordered_map<u32, std::function<void(Serializer& ser, void* data)>> serializeRecords;
-	std::unordered_map<u32, std::function<void(Deserializer& ser, void* data)>> deserializeRecords;
 
 	// Putting vectors and maps in cache will mean less calls to malloc and free
 	// as the capacity of both containers goes up
@@ -1006,8 +1069,16 @@ protected:
 		std::map<std::vector<u32>, std::vector<u32>> archetypeComponent;
 	} cache;
 
+	std::vector<flecs::entity> allEntityManagement;
+	std::vector<flecs::system> forceComponentChangeSystem;
 
-	std::unordered_map<u32, std::unordered_set<u32>> componentsChanged;
+	std::unordered_map<u32, std::function<void(Serializer& ser, void* data)>> serializeRecords;
+	std::unordered_map<u32, std::function<void(Deserializer& ser, void* data)>> deserializeRecords;
+
+	std::unordered_map<u32, std::unordered_set<u32>> highPiorityComponentsUpdates;
+	std::unordered_map<u32, std::unordered_set<u32>> lowPiorityComponentsUpdates;
+
+	std::unordered_map<u32, std::vector<u32>> componentsCreated;
 	std::unordered_map<u32, std::vector<u32>> componentsDestroyed;
 	std::unordered_set<u32> entitiesDestroyed;
 	std::vector<u32> entitiesEnabled;
@@ -1261,15 +1332,14 @@ public:
 		networkUpdate.setFunction([&](float) { syncUpdate(); });
 	}
 
-	void syncUpdate(bool force = false) {
+	void syncUpdate() {
 		EntityWorldNetworkManager& worldNetworkManager = getEntityWorldNetworkManager();
 		PhysicsWorldNetworkManager& physicsWorldManager = getPhysicsWorldNetworkManager();
 		NetworkManager& networkManager = getNetworkManager();
 
 		OutputBuffer message;
-		if(force ||
-			physicsWorldManager.isPhysicsWorldSnapshotReady() ||
-		    worldNetworkManager.entityComponentMetaSnapshotReady() ||
+		if(physicsWorldManager.isPhysicsWorldSnapshotReady() ||
+		    worldNetworkManager.isEntityComponentMetaSnapshotReady() ||
 			needStateUpdate) {
 			Serializer ser = startSerialize(message);
 			ser.object(MESSAGE_HEADER_STATE_SNAPSHOT);
@@ -1281,11 +1351,20 @@ public:
 			needStateUpdate = false;
 		}
 
-		if(force ||
-			worldNetworkManager.componentSnapshotReady()) {
+		// send high piority with reliability
+		if(worldNetworkManager.isHighPiorityComponentSnapshotReady()) {
 			Serializer ser = startSerialize(message); // if you see here a warning here ignore it.
 			ser.object(MESSAGE_HEADER_COMPONENT_SNAPSHOT);
-			worldNetworkManager.serializeComponentSnapshot(ser); // COMPONENT
+			worldNetworkManager.serializeHighPiorityComponentUpdates(ser);
+			endSerialize(ser, message);
+			networkManager.sendMessage(0, std::move(message), true, true);
+		}
+
+		// send low piority with no reliability
+		if (worldNetworkManager.isLowPiorityComponentSnapshotReady()) {
+			Serializer ser = startSerialize(message); // if you see here a warning here ignore it.
+			ser.object(MESSAGE_HEADER_COMPONENT_SNAPSHOT);
+			worldNetworkManager.serializeLowPiorityComponentUpdates(ser);
 			endSerialize(ser, message);
 			networkManager.sendMessage(0, std::move(message), true);
 		}
@@ -1293,10 +1372,10 @@ public:
 
 	// Refer to NetworkManager::sendMessage() for param info
 	// sends a full snapshot to the selected connection or all.
-	void fullSyncUpdate(HSteamNetConnection who, bool sendAll = false) {
+	void fullSyncUpdate(HSteamNetConnection who) {
 		getEntityWorldNetworkManager().yeildAllComponenents();
 		getPhysicsWorldNetworkManager().yieldAll();
-		syncUpdate(true); 
+		syncUpdate(); 
 	}
 
 	// sets the amount of network updates (flecs::world entity syncing and such)

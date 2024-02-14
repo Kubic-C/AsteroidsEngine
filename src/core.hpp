@@ -296,7 +296,7 @@ struct CoreModule {
 
         EntityWorldNetworkManager& manager = getEntityWorldNetworkManager();
         manager.registerComponent<TransformComponent>();
-        manager.registerComponent<ShapeComponent>();
+        manager.registerComponent<ShapeComponent>(ComponentPiority::High);
         manager.registerComponent<IntegratableComponent>();
 
         getEntityWorld().enable_range_check(true);
