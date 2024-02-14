@@ -52,14 +52,14 @@ class CustomServerInterface : public ServerInterface {
 		MessageBuffer buffer;
 		Serializer ser = startSerialize(buffer);
 		ser.object(MESSAGE_HEADER_TEXT);
-		text.str = "Hello " + std::to_string(conn) + ". Fuck you respectfully.";
+		text.str = "Hello " + std::to_string(conn) + ".";
 		ser.object(text);
 		endSerialize(ser, buffer);
 		networkManager.sendMessage(conn, std::move(buffer), false, true);
 
 		ser = startSerialize(buffer);
 		ser.object(MESSAGE_HEADER_TEXT);
-		text.str = "Oi uh .. a new client just joined, " + std::to_string(conn) + ", he's kinda a dickhead\n";
+		text.str = "A new client just joined, " + std::to_string(conn) + "\n";
 		ser.object(text);
 		endSerialize(ser, buffer);
 		networkManager.sendMessage(conn, std::move(buffer), true, true);
