@@ -22,10 +22,12 @@ struct Engine {
 	std::shared_ptr<tgui::Gui> gui;
 	std::shared_ptr<PhysicsWorld> physicsWorld;
 	std::shared_ptr<PhysicsWorldNetworkManager> physicsWorldNetwork;
+	std::shared_ptr<NetworkSnapshotManager> networkSnaphots;
 	std::unordered_map<u64, StateInfo> states;
 	u64 activeState;
 	u64 nextActiveState;
-	bool stateChanged;
+	u64 lastState; // the state in the last tick
+	u64 currentTick;
 };
 
 Engine* engine = nullptr; 
@@ -33,6 +35,10 @@ Engine* engine = nullptr;
 namespace impl {
 	bool validState(u64 id) {
 		return engine->states.find(id) != engine->states.end();
+	}
+
+	float getTickRate() {
+		return engine->ticker.getRate();
 	}
 
 	u64 _registerState(std::shared_ptr<State> ptr, std::type_index typeId) {
@@ -69,7 +75,6 @@ namespace impl {
 		prevState.state->getModule().disable();
 		prevState.state->onLeave();
 		engine->activeState = stateId;
-		engine->stateChanged = true;
 		nextState.state->onEntry();
 		nextState.state->getModule().enable();
 
@@ -130,9 +135,14 @@ namespace impl {
 
 	void tick(float deltaTime) {
 		engine->states[engine->activeState].state->onTick(deltaTime);
-		engine->entityWorld.progress(deltaTime);	
 
-		engine->stateChanged = false; // reset the state changed tick before transition (if we do transition)
+		engine->networkManager->beginTick();
+		engine->entityWorld.progress(deltaTime);
+		engine->networkManager->endTick();
+		
+		engine->currentTick++;
+		engine->lastState = engine->activeState;
+
 		if(engine->nextActiveState != UINT64_MAX) {
 			::ae::impl::transitionState(engine->nextActiveState);
 			engine->nextActiveState = UINT64_MAX;
@@ -163,18 +173,17 @@ void init() {
 	int32_t maxMessageSize = 1000000; // 1 mega byte
 	engine->util->SetConfigValue(k_ESteamNetworkingConfig_SendBufferSize, k_ESteamNetworkingConfig_Global, 0,  k_ESteamNetworkingConfig_Int32, &maxMessageSize);
 
-#ifndef NDEBUG
 	// For testing the network :)
-	float FakePacketLoss_Send      = 5;
-	float FakePacketLoss_Recv      = 5;
+	float FakePacketLoss_Send      = 20;
+	float FakePacketLoss_Recv      = 00;
 	i32   FakePacketLag_Send       = 10;
 	i32   FakePacketLag_Recv       = 10;
-	float FakePacketReorder_Send   = 20;
-	float FakePacketReorder_Recv   = 20;
+	float FakePacketReorder_Send   = 0;
+	float FakePacketReorder_Recv   = 0;
 	i32   FakePacketReorder_Time   = 0;
-	float FakePacketDup_Send       = 10;
-	float FakePacketDup_Recv       = 10;
-	i32   FakePacketDup_TimeMax    = 5;
+	float FakePacketDup_Send       = 0;
+	float FakePacketDup_Recv       = 0;
+	i32   FakePacketDup_TimeMax    = 0;
 	i32   PacketTraceMaxBytes      = 0;
 	i32   FakeRateLimit_Send_Rate  = 0;
 	i32   FakeRateLimit_Send_Burst = 0;
@@ -195,7 +204,6 @@ void init() {
 	setGlobalNetworkingConfig(k_ESteamNetworkingConfig_FakeRateLimit_Send_Burst, k_ESteamNetworkingConfig_Int32, &FakeRateLimit_Send_Burst);
 	setGlobalNetworkingConfig(k_ESteamNetworkingConfig_FakeRateLimit_Recv_Rate,  k_ESteamNetworkingConfig_Int32, &FakeRateLimit_Recv_Rate);
 	setGlobalNetworkingConfig(k_ESteamNetworkingConfig_FakeRateLimit_Recv_Burst, k_ESteamNetworkingConfig_Int32, &FakeRateLimit_Recv_Burst);
-#endif
 
 	// Time
 	engine->ticker.setRate(60.0f);
@@ -214,7 +222,13 @@ void init() {
 	// State
 	u64 unknownStateId = registerState<UnknownState, UnknownModule>();
 	engine->activeState = unknownStateId;
-	engine->stateChanged = false;
+
+	// Ticking
+	engine->currentTick = 0;
+}
+
+u64 getCurrentTick() {
+	return engine->currentTick;
 }
 
 NetworkManager& getNetworkManager() {
@@ -259,7 +273,7 @@ void transitionState(u64 id, bool immediate) {
 }
 
 bool hasStateChanged() {
-	return engine->stateChanged;
+	return engine->lastState != engine->activeState;
 }
 
 void setWindow(std::shared_ptr<sf::RenderWindow> window) {
@@ -270,6 +284,25 @@ void setWindow(std::shared_ptr<sf::RenderWindow> window) {
 
 sf::RenderWindow& getWindow() {
 	return *engine->window;
+}
+
+void enableSnapshots() {
+	assert(!engine->networkSnaphots);
+
+	engine->networkSnaphots = std::make_shared<NetworkSnapshotManager>();
+}
+
+void disableSnapshots() {
+	engine->networkSnaphots = nullptr;
+}
+
+NetworkSnapshotManager& getNetworkSnapshotManager() {
+	assert(engine->networkSnaphots && "Must have snapshots enabled");
+	return *engine->networkSnaphots;
+}
+
+bool isSnapshotsEnabled() {
+	return engine->networkSnaphots != nullptr;
 }
 
 void setFps(u32 fps) {

@@ -12,9 +12,13 @@ typedef tgui::Gui Gui;
 namespace impl {
 	u64 _registerState(std::shared_ptr<State> ptr, std::type_index typeId);
 	void _registerNetworkStateModule(flecs::entity module, std::type_index networkInterfaceId, u64 stateId);
+
+	float getTickRate();
 }
 
 void init();
+
+u64 getCurrentTick();
 
 Gui& getGui();
 
@@ -69,6 +73,12 @@ bool hasStateChanged();
 void setWindow(std::shared_ptr<sf::RenderWindow> window);
 
 sf::RenderWindow& getWindow();
+
+void enableSnapshots();
+void disableSnapshots();
+NetworkSnapshotManager& getNetworkSnapshotManager();
+bool isSnapshotsEnabled();
+
 
 void setFps(u32 fps);
 

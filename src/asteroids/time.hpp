@@ -78,6 +78,10 @@ public:
         return deltaTime;
     }
 
+    float getRate() {
+        return rate;
+    }
+
 private:
     Function function = nullptr;
     float rate = 0.0;

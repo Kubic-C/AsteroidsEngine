@@ -15,6 +15,16 @@ namespace bitsery {
 	}
 
 	template<typename S>
+	void serialize(S& s, u16& o) {
+		s.value2b(o);
+	}
+
+	template<typename S>
+	void serialize(S& s, u8& o) {
+		s.value1b(o);
+	}
+
+	template<typename S>
 	void serialize(S& s, sf::Vector2f& v) {
 		s.value4b(v.x);
 		s.value4b(v.y);
@@ -75,6 +85,13 @@ public:
 	// will this resource automatically be free'd?
 	void setOwner(bool isOwner) {
 		hasOwnership = isOwner;
+	}
+
+	void copyData(size_t size, const u8* src) {
+		hasOwnership = true;
+
+		resize(size);
+		memcpy(data, src, size);
 	}
 
 	void setData(size_t size, u8* data, bool hasOwnership = true) {
@@ -168,12 +185,10 @@ private:
 	bool hasOwnership;
 };
 
-typedef MessageBuffer OutputBuffer;
-typedef ::bitsery::OutputBufferAdapter<OutputBuffer> OutputAdapter;
+typedef ::bitsery::OutputBufferAdapter<MessageBuffer> OutputAdapter;
 typedef ::bitsery::Serializer<OutputAdapter> Serializer;
 
-typedef MessageBuffer InputBuffer;
-typedef ::bitsery::InputBufferAdapter<InputBuffer> InputAdapter;
+typedef ::bitsery::InputBufferAdapter<MessageBuffer> InputAdapter;
 typedef ::bitsery::Deserializer<InputAdapter> Deserializer;
 
 AE_NAMESPACE_END
@@ -235,12 +250,12 @@ namespace bitsery {
 
 AE_NAMESPACE_BEGIN
 
-inline Serializer startSerialize(OutputBuffer& buffer) {
+inline Serializer startSerialize(MessageBuffer& buffer) {
 	Serializer ser(buffer);
 	return ser;
 }
 
-inline void endSerialize(Serializer& ser, OutputBuffer& buffer) {
+inline void endSerialize(Serializer& ser, MessageBuffer& buffer) {
 	ser.adapter().flush();
 	buffer.resize(ser.adapter().writtenBytesCount());
 }
@@ -256,11 +271,11 @@ inline bool endDeserialize(Deserializer& des) {
 }
 
 enum MessageHeader: u8 {
-	MESSAGE_HEADER_INVALID = UINT8_MAX,
-	 MESSAGE_HEADER_COMPONENT_SNAPSHOT = 0,
-	// MESSAGE_HEADER_ENTITY_COMPONENT_META_SNAPSHOT,
-	// MESSAGE_HEADER_PHYSICS_SNAPSHOT,
-	MESSAGE_HEADER_STATE_SNAPSHOT,
+	MESSAGE_HEADER_INVALID = 0,
+	MESSAGE_HEADER_SNAPSHOT_COMPILATION_RELIABLE,
+	MESSAGE_HEADER_SNAPSHOT_COMPILATION_UNRELIABLE,
+	MESSAGE_HEADER_REQUEST_SNAPSHOT_FULL,
+	MESSAGE_HEADER_SNAPSHOT_FULL,
 	MESSAGE_HEADER_CORE_LAST // it is named core in the case end-users also want to have multiple MessageHeader enums
 };
 
@@ -270,7 +285,7 @@ void serialize(S& s, MessageHeader& header) {
 }
 
 struct Message {
-	HSteamNetConnection who;
+	HSteamNetConnection who = 0;
 	MessageBuffer data;
 	bool sendAll = false;
 	bool sendReliable = false;
@@ -279,6 +294,7 @@ struct Message {
 namespace impl {
 	ISteamNetworkingUtils* getUtils();
 	ISteamNetworkingSockets* getSockets();
+	extern float getTickRate();
 
 	struct MessageBufferMeta {
 		u32 messagesSent = 0;
@@ -317,9 +333,14 @@ protected:
 
 	virtual void close() = 0;
 
+	/* This used for snapshotBegin and snapshotEnd in servers 
+	   and applying recieved snapshots by the tick in clients */
+	virtual void beginTick() {}
+	virtual void endTick() {}
+
 public:
 	// returns true if the message can't be used
-	virtual bool _internalOnMessageRecieved(HSteamNetConnection conn, MessageHeader header, Deserializer& deserializer) {
+	virtual bool _internalOnMessageRecieved(HSteamNetConnection conn, MessageHeader header, Deserializer& deserializer, u32 size, const void* data) {
 		return true;
 	}
 
@@ -486,7 +507,7 @@ public:
 	}
 
 	void update() {
-		if(!networkInterface)
+		if(!hasNetworkInterface())
 			return;
 
 		impl::getSockets()->RunCallbacks();
@@ -497,7 +518,7 @@ public:
 			MessageHeader header = MESSAGE_HEADER_INVALID;
 
 			des.object(header);
-			if(networkInterface->_internalOnMessageRecieved(message->m_conn, header, des))
+			if(networkInterface->_internalOnMessageRecieved(message->m_conn, header, des, message->GetSize(), message->GetData()))
 				networkInterface->onMessageRecieved(message->m_conn, header, des);
 			
 			if(!endDeserialize(des)) {
@@ -528,6 +549,20 @@ public:
 		}
 
 		networkInterface->close();
+	}
+
+	void beginTick() {
+		if(!hasNetworkInterface())
+			return;
+
+		networkInterface->beginTick();
+	}
+
+	void endTick() {
+		if (!hasNetworkInterface())
+			return;
+
+		networkInterface->endTick();
 	}
 
 	// Adds a warning to a connection
@@ -635,12 +670,18 @@ enum class ComponentPiority {
 
 struct NoPhase {};
 
+extern u64 getCurrentTick();
+
 class EntityWorldNetworkManager {
+	bool isIdValid(u32 id) {
+		return impl::af(id) != 0;
+	}
+
 public:
 	EntityWorldNetworkManager() {
 		flecs::world& world = getEntityWorld();
 
-		world.component<NetworkedEntity>();
+		registerComponent<NetworkedEntity>();
 		world.component<NetworkedComponent>();
 		world.add<ae::NetworkedEntity>(); // entity world should be Networked by default.
 
@@ -679,13 +720,14 @@ public:
 	}
 
 	bool isEntityComponentMetaSnapshotReady() {
-		return (bool)componentsDestroyed.size() ||
+		return (bool)componentsCreated.size() ||
+			   (bool)componentsDestroyed.size() ||
 			   (bool)entitiesDestroyed.size() ||
 			   (bool)entitiesEnabled.size() ||
 			   (bool)entitiesDisabled.size();
 	}
 
-	void serializeEntityComponentMetaSnapshot(Serializer& ser) {
+	void serializeEntityComponentMetaSnapshot(Serializer& ser, bool noDestroyed = false) {
 		flecs::world& world = getEntityWorld();
 
 		if (world.is_deferred())
@@ -715,17 +757,23 @@ public:
 		// Created Components
 		cache.archetypeComponent.clear();
 		for (auto& pair : componentsCreated) {
-			if (impl::af(pair.first) == 0) {
+			if (!isIdValid(pair.first)) {
 				continue;
 			}
 
-			cache.archetypeComponent[pair.second].push_back(pair.first);
+			cache.extractIdsFromSet(pair.second);
+
+			cache.archetypeComponent[cache.idList].push_back(pair.first);
 		}
 
 		ser.object((u32)cache.archetypeComponent.size());
 		for (std::pair<const std::vector<u32>, std::vector<u32>>& pair : cache.archetypeComponent) {
 			// Serialize the order of components
-			ser.container(pair.first, UINT32_MAX);
+			const std::vector<u32>& componentTypes = pair.first;
+			ser.object((u32)componentTypes.size()); // entity component type count
+			for (u32 i = 0; i < componentTypes.size(); i++) { // entity component types
+				ser.object(componentTypes[i]);
+			}
 
 			// Then serialize all entity-components
 			ser.object((u32)pair.second.size());
@@ -734,20 +782,32 @@ public:
 			}
 		}
 
-		// Destroyed Components
+		// Destroyed Components and Destroyed entites have to be skipped in full snapshots
+		if(noDestroyed) {
+			ser.object((u32)0);
+			ser.object((u32)0);
+			goto disabledOrEnabled;
+		}
+		
 		cache.archetypeComponent.clear();
 		for (auto& pair : componentsDestroyed) {
-			if (impl::af(pair.first) == 0) {
+			if (!isIdValid(pair.first)) {
 				continue;
 			}
+			
+			cache.extractIdsFromSet(pair.second);
 
-			cache.archetypeComponent[pair.second].push_back(pair.first);
+			cache.archetypeComponent[cache.idList].push_back(pair.first);
 		}
 
 		ser.object((u32)cache.archetypeComponent.size());
 		for (std::pair<const std::vector<u32>, std::vector<u32>>& pair : cache.archetypeComponent) {
 			// Serialize the order of components
-			ser.container(pair.first, UINT32_MAX);
+			const std::vector<u32>& componentTypes = pair.first;
+			ser.object((u32)componentTypes.size()); // entity component type count
+			for (u32 i = 0; i < componentTypes.size(); i++) { // entity component types
+				ser.object(componentTypes[i]);
+			}
 
 			// Then serialize all entity-components
 			ser.object((u32)pair.second.size());
@@ -762,6 +822,8 @@ public:
 		for(u32 id : entitiesDestroyed) {
 			ser.object(id);
 		}
+
+	disabledOrEnabled:
 
 		// Enabled entities
 
@@ -803,14 +865,13 @@ public:
 				des.object(cache.idList[compI]);
 			}
 
-
 			// Now deserializing all the entity-component data
 			u32 entityCount;
 			des.object(entityCount);
 			for(u32 entityI = 0; entityI < entityCount; entityI++) {
 				u32 serId;
 				des.object(serId);
-				flecs::entity e = world.ensure(serId).add<NetworkedEntity>(); 
+				flecs::entity e = world.ensure(serId); 
 
 				for(u32 compId : cache.idList) {
 					deserializeRecords[compId](des, e.get_mut(impl::af(compId)));
@@ -818,6 +879,8 @@ public:
 			} 
 		}
 	}
+
+	u64 lastTick;
 
 	void deserializeEntityComponentMetaSnapshot(Deserializer& des) {
 		flecs::world& world = getEntityWorld();
@@ -830,11 +893,16 @@ public:
 		u32 archetypeCount = 0;
 		des.object(archetypeCount);
 		for (u32 i = 0; i < archetypeCount; i++) {
-			// Serialize the order of components
+			// Deserialize the order of components
 			cache.idList.clear();
-			des.container(cache.idList, UINT32_MAX);
+			u32 idListSize;
+			des.object(idListSize);
+			cache.idList.resize(idListSize);
+			for (u32 compI = 0; compI < idListSize; compI++) { // entity component types
+				des.object(cache.idList[compI]);
+			}
 
-			// Then serialize all entity-components
+			// Then deserialize all entity-components
 			u32 entityCount;
 			des.object(entityCount);
 			for (u32 entityI = 0; entityI < entityCount; entityI++) {
@@ -852,11 +920,16 @@ public:
 
 		des.object(archetypeCount);
 		for (u32 i = 0; i < archetypeCount; i++) {
-			// Serialize the order of components
+			// Deserialize the order of components
 			cache.idList.clear();
-			des.container(cache.idList, UINT32_MAX);
+			u32 idListSize;
+			des.object(idListSize);
+			cache.idList.resize(idListSize);
+			for (u32 compI = 0; compI < idListSize; compI++) { // entity component types
+				des.object(cache.idList[compI]);
+			}
 
-			// Then serialize all entity-components
+			// Then deserialize all entity-components
 			u32 entityCount;
 			des.object(entityCount);
 			for (u32 entityI = 0; entityI < entityCount; entityI++) {
@@ -878,7 +951,8 @@ public:
 			u32 serId;
 			des.object(serId);
 
-			if(!world.is_alive(serId)) {
+			if(!isIdValid(serId)) {
+				log(ERROR_SEVERITY_WARNING, "Possible dsync: recieved destroyEntities contained entity that ws not alive: %u\n", serId);
 				continue;
 			}
 	
@@ -892,7 +966,7 @@ public:
 			u32 serId;
 			des.object(serId);
 
-			if (!world.is_alive(serId)) {
+			if (!isIdValid(serId)) {
 				log(ERROR_SEVERITY_WARNING, "Possible dsync: recieved enabledEntities contained entity that ws not alive: %u\n", serId);
 				continue;
 			}
@@ -907,7 +981,7 @@ public:
 			u32 serId;
 			des.object(serId);
 
-			if (!world.is_alive(serId)) {
+			if (!isIdValid(serId)) {
 				log(ERROR_SEVERITY_WARNING, "Possible dsync: recieved disabledEntites contained entity that ws not alive: %u\n", serId);
 				continue;
 			}
@@ -934,65 +1008,23 @@ public:
 
 		componentId.is_a<NetworkedComponent>();
 
-		serializeRecords[rawId] =
-			[](Serializer& ser, void* data) {
-				ser.object(*(T*)data);
-			};
-
-		deserializeRecords[rawId] =
-			[](Deserializer& des, void* data) {
-				des.object(*(T*)data);
-			};
-
-		if(piority == ComponentPiority::Low) {
-			allEntityManagement.push_back(
-				world.observer<T>()
-				.event(flecs::OnSet).each([rawId, this](flecs::entity e, T& comp) {
-					lowPiorityComponentsUpdates[impl::cf(e)].insert(rawId);
-				}));
-
-			allEntityManagement.push_back(
-				world.observer<T>()
-				.event(flecs::OnAdd).each([rawId, this](flecs::entity e, T& comp) {
-					lowPiorityComponentsUpdates[impl::cf(e)].insert(rawId);
-				}));
-		} else {
-			allEntityManagement.push_back(
-				world.observer<T>()
-				.event(flecs::OnSet).each([rawId, this](flecs::entity e, T& comp) {
-					highPiorityComponentsUpdates[impl::cf(e)].insert(rawId);
-				}));
-
-			allEntityManagement.push_back(
-				world.observer<T>()
-				.event(flecs::OnAdd).each([rawId, this](flecs::entity e, T& comp) {
-					highPiorityComponentsUpdates[impl::cf(e)].insert(rawId);
-				}));
-		}
-
-		forceComponentChangeSystem.push_back(
-		world.system<T>()
-			.kind<NoPhase>()
-			.each([rawId, this](flecs::entity e, T& comp) {
-				highPiorityComponentsUpdates[impl::cf(e)].insert(rawId);
-			}));
-
 		allEntityManagement.push_back(
 			world.observer<T>()
 			.event(flecs::OnAdd).each([rawId, this](flecs::entity e, T&) {
-				componentsCreated[impl::cf(e)].push_back(rawId);
+				componentsCreated[impl::cf(e)].insert(rawId);
 			}));
 
 		allEntityManagement.push_back(
 			world.observer<T>()
-			.with<NetworkedEntity>()
-			.event(flecs::OnRemove).each([rawId, this](flecs::entity e, T& comp){
-				componentsDestroyed[impl::cf(e)].push_back(rawId);
+			.event(flecs::OnRemove).each([rawId, this](flecs::entity e, T&){
+				componentsDestroyed[impl::cf(e)].insert(rawId);
 			}));
+
+		registerIfNonEmptyComponent<T>(rawId, piority, std::is_empty<T>());
 
 		return componentId;
 	}
-	
+
 	void enable(flecs::entity entity) {
 		entity.enable();
 		entitiesEnabled.push_back(impl::cf(entity));
@@ -1007,7 +1039,74 @@ public:
 		return getEntityWorld().entity().add<NetworkedEntity>();
 	}
 
+	void disableAllSerialization() {
+		for(flecs::entity e : allEntityManagement) {
+			e.disable();
+		}
+	}
+
 protected:
+	template<typename T>
+	void registerIfNonEmptyComponent(u32 rawId, ComponentPiority piority, std::true_type) {
+		flecs::world& world = getEntityWorld();
+		
+		forceComponentChangeSystem.push_back(
+			 world.system<T>()
+			.kind<NoPhase>()
+			.each([rawId, this](flecs::entity e, T& comp) {
+				componentsCreated[impl::cf(e)].insert(rawId);
+			}));
+	}
+
+	template<typename T>
+	void registerIfNonEmptyComponent(u32 rawId, ComponentPiority piority, std::false_type) {
+		flecs::world& world = getEntityWorld();
+
+		serializeRecords[rawId] =
+			[](Serializer& ser, void* data) {
+			ser.object(*(T*)data);
+			};
+
+		deserializeRecords[rawId] =
+			[](Deserializer& des, void* data) {
+			des.object(*(T*)data);
+			};
+
+		if (piority == ComponentPiority::Low) {
+			allEntityManagement.push_back(
+				world.observer<T>()
+				.event(flecs::OnSet).each([rawId, this](flecs::entity e, T& comp) {
+					lowPiorityComponentsUpdates[impl::cf(e)].insert(rawId);
+					}));
+
+			allEntityManagement.push_back(
+				world.observer<T>()
+				.event(flecs::OnAdd).each([rawId, this](flecs::entity e, T& comp) {
+					lowPiorityComponentsUpdates[impl::cf(e)].insert(rawId);
+					}));
+		}
+		else {
+			allEntityManagement.push_back(
+				world.observer<T>()
+				.event(flecs::OnSet).each([rawId, this](flecs::entity e, T& comp) {
+					highPiorityComponentsUpdates[impl::cf(e)].insert(rawId);
+					}));
+
+			allEntityManagement.push_back(
+				world.observer<T>()
+				.event(flecs::OnAdd).each([rawId, this](flecs::entity e, T& comp) {
+					highPiorityComponentsUpdates[impl::cf(e)].insert(rawId);
+					}));
+		}
+
+		forceComponentChangeSystem.push_back(
+			world.system<T>()
+			.kind<NoPhase>()
+			.each([rawId, this](flecs::entity e, T& comp) {
+				highPiorityComponentsUpdates[impl::cf(e)].insert(rawId);
+			}));
+	}
+
 	void serializeComponentSnapshot(std::unordered_map<u32, std::unordered_set<u32>>& componentsChanged, Serializer& ser) {
 		flecs::world& world = getEntityWorld();
 
@@ -1028,10 +1127,7 @@ protected:
 			if (impl::af(pair.first) == 0)
 				continue;
 
-			cache.idList.clear();
-			for (auto it = pair.second.begin(); it != pair.second.end(); ) {
-				cache.idList.push_back(std::move(pair.second.extract(it++).value()));
-			}
+			cache.extractIdsFromSet(pair.second);
 
 			cache.archetypeComponent[cache.idList].push_back(pair.first);
 		}
@@ -1065,6 +1161,14 @@ protected:
 	// Putting vectors and maps in cache will mean less calls to malloc and free
 	// as the capacity of both containers goes up
 	struct Cache {
+		template<typename Set>
+		void extractIdsFromSet(Set& set) {
+			idList.clear();
+			for (auto it = set.begin(); it != set.end(); ) {
+				idList.push_back(std::move(set.extract(it++).value()));
+			}
+		}
+
 		std::vector<u32> idList;
 		std::map<std::vector<u32>, std::vector<u32>> archetypeComponent;
 	} cache;
@@ -1078,8 +1182,8 @@ protected:
 	std::unordered_map<u32, std::unordered_set<u32>> highPiorityComponentsUpdates;
 	std::unordered_map<u32, std::unordered_set<u32>> lowPiorityComponentsUpdates;
 
-	std::unordered_map<u32, std::vector<u32>> componentsCreated;
-	std::unordered_map<u32, std::vector<u32>> componentsDestroyed;
+	std::unordered_map<u32, std::set<u32>> componentsCreated;
+	std::unordered_map<u32, std::set<u32>> componentsDestroyed;
 	std::unordered_set<u32> entitiesDestroyed;
 	std::vector<u32> entitiesEnabled;
 	std::vector<u32> entitiesDisabled;
@@ -1203,32 +1307,210 @@ private:
 	flecs::query<ShapeComponent> query;
 };
 
-/* Default network interfaces */
-
 extern u64 getCurrentStateId();
 extern void transitionState(u64 id, bool immediate);
 extern bool hasStateChanged();
 
+namespace impl {
+	enum ReliableSnapshotBitIndexes : u8 {
+		STATE_SERIALIZED = 1 << 0,
+		PHYSICS_SERIALIZED = 1 << 1,
+		META_SERIALIZED = 1 << 2,
+		HIGH_PIORITY_SERIALIZED = 1 << 3
+	};
+
+	enum UnreliableSnapshotBitIndexes : u8 {
+		LOW_PIORITY_SERIALIZED = 1 << 0,
+	};
+};
+
 /**
- * The client interface's purpose is to connect and send/recieve messages to a server.
+ * The snapshot manager is responsible for putting together
+ * of what happens in between frames.
+ */
+class NetworkSnapshotManager {
+public:
+	NetworkSnapshotManager() 
+		: reliableSnapshotser(startSerialize(reliableSnapshots)), unreliableSnapshotser(startSerialize(unreliableSnapshots)) {}
+
+	MessageBuffer& getReliableSnapshotCompilation() {
+		return reliableSnapshots;
+	}
+
+	MessageBuffer& getUnreliableSnapshotCompilation() {
+		return unreliableSnapshots;
+	}
+
+	void beginSnapshotCompilation() {
+		tickCount = getCurrentTick();
+
+		clearSnapshotCompilation();
+
+		reliableSnapshotser = startSerialize(reliableSnapshots);
+		reliableSnapshotser.object(MESSAGE_HEADER_SNAPSHOT_COMPILATION_RELIABLE);
+		reliableSnapshotser.object(tickCount);
+
+		unreliableSnapshotser = startSerialize(unreliableSnapshots);
+		unreliableSnapshotser.object(MESSAGE_HEADER_SNAPSHOT_COMPILATION_UNRELIABLE);
+		unreliableSnapshotser.object(tickCount);
+		compilationStarted = true;
+	}
+
+	void endSnapshotCompilation() {
+		compilationStarted = false;
+		endSerialize(unreliableSnapshotser, unreliableSnapshots);
+		endSerialize(reliableSnapshotser, reliableSnapshots);
+	}
+
+	void clearSnapshotCompilation() {
+		compilationStarted = false;
+		reliableSnapshots.reset();
+		unreliableSnapshots.reset();
+	}
+
+	bool hasSnapshotCompilationStarted() {
+		return compilationStarted;
+	}
+
+	void beginSnapshot() {
+		tickCount++;
+	}
+	
+	void endSnapshot() {
+		serializeReliableSnapshot();
+		serializeUnreliableSnapshot();
+	}
+
+private:
+	void serializeReliableSnapshot() {
+		EntityWorldNetworkManager& worldManager = getEntityWorldNetworkManager();
+		PhysicsWorldNetworkManager& physicsManager = getPhysicsWorldNetworkManager();
+
+		u8 snapshotFlags = 0;
+		if (hasStateChanged())
+			snapshotFlags |= impl::STATE_SERIALIZED;
+		if (physicsManager.isPhysicsWorldSnapshotReady())
+			snapshotFlags |= impl::PHYSICS_SERIALIZED;
+		if (worldManager.isEntityComponentMetaSnapshotReady())
+			snapshotFlags |= impl::META_SERIALIZED;
+		if (worldManager.isHighPiorityComponentSnapshotReady())
+			snapshotFlags |= impl::HIGH_PIORITY_SERIALIZED;
+
+		reliableSnapshotser.object(snapshotFlags);
+
+		u32 size = 0;
+		OutputAdapter& adapter = reliableSnapshotser.adapter();
+		u32 prevWritePos = adapter.currentWritePos();
+		reliableSnapshotser.object<u32>(0);
+
+		if (snapshotFlags & impl::STATE_SERIALIZED)
+			reliableSnapshotser.object(getCurrentStateId());
+		if (snapshotFlags & impl::PHYSICS_SERIALIZED)
+			physicsManager.serializePhysicsWorldSnapshot(reliableSnapshotser);
+		if (snapshotFlags & impl::META_SERIALIZED)
+			worldManager.serializeEntityComponentMetaSnapshot(reliableSnapshotser);
+		if (snapshotFlags & impl::HIGH_PIORITY_SERIALIZED)
+			worldManager.serializeHighPiorityComponentUpdates(reliableSnapshotser);
+
+		u32 postWritePos = adapter.currentWritePos();
+		adapter.currentWritePos(prevWritePos);
+		size = postWritePos - prevWritePos - sizeof(u32);
+		reliableSnapshotser.object(size);
+		adapter.currentWritePos(postWritePos);
+	}
+
+	void serializeUnreliableSnapshot() {
+		EntityWorldNetworkManager& worldManager = getEntityWorldNetworkManager();
+		PhysicsWorldNetworkManager& physicsManager = getPhysicsWorldNetworkManager();
+
+		u8 snapshotFlags = 0;
+		if (worldManager.isLowPiorityComponentSnapshotReady())
+			snapshotFlags |= impl::LOW_PIORITY_SERIALIZED;
+
+		unreliableSnapshotser.object(snapshotFlags);
+
+		u32 size = 0;
+		OutputAdapter& adapter = unreliableSnapshotser.adapter();
+		u32 prevWritePos = adapter.currentWritePos();
+		unreliableSnapshotser.object<u32>(0);
+
+		if (snapshotFlags != 0) {
+			worldManager.serializeLowPiorityComponentUpdates(unreliableSnapshotser);
+		}
+
+		u32 postWritePos = adapter.currentWritePos();
+		adapter.currentWritePos(prevWritePos);
+		size = postWritePos - prevWritePos - sizeof(u32); // Don't include the size of SIZE
+		unreliableSnapshotser.object(size);
+		adapter.currentWritePos(postWritePos);
+	}
+private:
+	bool compilationStarted = false;
+	u32 tickCount = 0;
+
+	// order of members matter here fyi
+	MessageBuffer reliableSnapshots;
+	MessageBuffer unreliableSnapshots;
+	Serializer reliableSnapshotser;
+	Serializer unreliableSnapshotser;
+};
+
+extern void enableSnapshots();
+extern void disableSnapshots();
+extern NetworkSnapshotManager& getNetworkSnapshotManager();
+extern bool isSnapshotsEnabled();
+
+/* Default network interfaces */
+
+/**
+ * @brief the client interface is one of the two main interfaces
+ * library-users will use inherit from. The client interface
+ * is used to connect to another application that uses the 
+ * 'ServerInterface.' The client interface will handle
+ * all entity and physics syncing automatically.
  */
 class ClientInterface : public NetworkInterface {
 public:
+	/* When an entity is by the client, it will start at this range.
+	   I.E. the default client range for created entites. */
 	static constexpr u64 defaultLocalEntityRange = 1000000;
+	static constexpr size_t defaultMaxDsyncBeforeFullSnapshot = 20;
 
 	ClientInterface() {
 		flecs::world& world = getEntityWorld();
 
-		world.set_entity_range(defaultLocalEntityRange, 0);
+		world.set_entity_range(defaultLocalEntityRange, UINT64_MAX);
 		world.enable_range_check(true);
+
+		getEntityWorldNetworkManager().disableAllSerialization();
 	}
 
+	/**
+	 * @brief Is the client currently connected to anything?
+	 * 
+	 * @return true if the client is connected, false otherwise
+	 */
 	bool isOpen() final {
 		return connected;
 	}
 
+	/**
+	 * @brief Has the previous tried connection failed to connect?
+	 * 
+	 * @note NetworkManager::open() must be called before calling this function for
+	 * its results to be relevant.
+	 * 
+	 * @returns true if the client failed to connect, and false otherwise
+	 */
 	bool hasFailed() final {
 		return failed;
+	}
+
+	/**
+	 * @brief returns the currently processed server tick
+	 */
+	u32 getCurrentServerTick() const {
+		return currentServerTick;
 	}
 
 protected:
@@ -1244,7 +1526,7 @@ protected:
 		}
 
 		// this will insure that conn gets added to the connections list within the networkManager
-		// so if some function wants to send a message right open even we aren't technically connected
+		// so if some function wants to send a message right after open even when we aren't technically connected
 		// they can.
 		getNetworkManager().update();
 
@@ -1274,124 +1556,294 @@ protected:
 		connected = true;
 	}
 
-	bool _internalOnMessageRecieved(HSteamNetConnection conn, MessageHeader header, Deserializer& des) override {
+	bool _internalOnMessageRecieved(HSteamNetConnection conn, MessageHeader header, Deserializer& des, u32 size, const void* data) override {
 		flecs::world& world = getEntityWorld();
 		EntityWorldNetworkManager& entity = getEntityWorldNetworkManager();
 		PhysicsWorldNetworkManager& physics = getPhysicsWorldNetworkManager();
 
-		world.enable_range_check(false);
-
 		switch (header) {
-		case MESSAGE_HEADER_COMPONENT_SNAPSHOT:
-			entity.deserializeComponentSnapshot(des);
-			break;
+		case MESSAGE_HEADER_SNAPSHOT_COMPILATION_RELIABLE: {
+			u32 tickNum;
+			des.object(tickNum);
 
-		//case MESSAGE_HEADER_ENTITY_COMPONENT_META_SNAPSHOT:
-		//	entity.deserializeEntityComponentMetaSnapshot(des);
-		//	break;
+			while (!des.adapter().isCompletedSuccessfully()) {
+				u8 snapshotFlags;
+				u32 snapshotSize;
+				des.object(snapshotFlags);
+				des.object(snapshotSize);
 
-		//case MESSAGE_HEADER_PHYSICS_SNAPSHOT:
-		//	physics.deserializePhysicsWorldSnapshot(des);
-		//	break;
+				u32 currentOffset = des.adapter().currentReadPos();
 
-		case MESSAGE_HEADER_STATE_SNAPSHOT: {
-			u64 stateId;
-			des.object(stateId);
-			physics.deserializePhysicsWorldSnapshot(des);
-			entity.deserializeEntityComponentMetaSnapshot(des);
+				snapshotsQueue.push(tickNum);
+				snapshots[tickNum].reliableFlags = snapshotFlags;
+				snapshots[tickNum].reliable.copyData(snapshotSize, (u8*)data + currentOffset);
+				tickNum++;
 
-			ae::transitionState(stateId, true);
+				des.adapter().currentReadPos(currentOffset + snapshotSize);
+			}
 		} break;
 
-	
+		case MESSAGE_HEADER_SNAPSHOT_COMPILATION_UNRELIABLE: {
+			u32 tickNum;
+			des.object(tickNum);
+
+			while(!des.adapter().isCompletedSuccessfully()) {
+				u8 snapshotFlags;
+				u32 size;
+				des.object(snapshotFlags);
+				des.object(size);
+				// do not add the snapshot if the it is less then the current server tick
+				u32 currentOffset = des.adapter().currentReadPos();
+				if(tickNum < currentServerTick) {
+					tickNum++;
+					des.adapter().currentReadPos(currentOffset + size);
+					continue;
+				}
+
+				snapshots[tickNum].unreliableFlags = snapshotFlags;
+				snapshots[tickNum].unreliable.copyData(size, (u8*)data + currentOffset);
+				tickNum++;
+
+				des.adapter().currentReadPos(currentOffset + size);
+			}
+		} break;
+
+		case MESSAGE_HEADER_SNAPSHOT_FULL: {
+			sentFullSnapshotRequest = false;
+			u64 stateId;
+			u32 tickNum;
+
+			flecs::world& world = getEntityWorld();
+			world.remove<NetworkedEntity>();
+			world.delete_with<NetworkedEntity>();
+			world.add<NetworkedEntity>();
+
+			while(!snapshotsQueue.empty())
+				snapshotsQueue.pop();
+
+			snapshots.clear();
+
+			des.object(stateId);
+			des.object(tickNum);
+
+			transitionState(stateId, true);
+
+			getEntityWorld().enable_range_check(false);
+			physics.deserializePhysicsWorldSnapshot(des);
+			entity.deserializeEntityComponentMetaSnapshot(des);
+			entity.deserializeComponentSnapshot(des);
+			getEntityWorld().enable_range_check(true);
+		} break;
+
+		snapshotArrivedLate:
 		default:
-			world.enable_range_check(true);
 			return true;
 		}
 
-		world.enable_range_check(true);
 		return false;
 	}
 
+	void beginTick() override {
+		getEntityWorld().enable_range_check(false);
+
+		if(snapshots.size() > defaultMaxDsyncBeforeFullSnapshot && !sentFullSnapshotRequest) {
+			log(ERROR_SEVERITY_WARNING, "Possible dysnc, requesting full snapshot\n");
+			// We add a warning to the connection because if the D-sync is too large
+			// frequently, we should just give up on the connection
+			getNetworkManager().connectionAddWarning(conn);
+
+			MessageBuffer buffer;
+			Serializer ser = startSerialize(buffer);
+			ser.object(MESSAGE_HEADER_REQUEST_SNAPSHOT_FULL);
+			endSerialize(ser, buffer);
+	
+			getNetworkManager().sendMessage(0, std::move(buffer), true, true);
+
+			sentFullSnapshotRequest = true;
+		}
+
+		if(!snapshotsQueue.empty()) {
+			currentServerTick = snapshotsQueue.front();
+			Snapshot& snapshot = snapshots[currentServerTick];
+			EntityWorldNetworkManager& worldManager = getEntityWorldNetworkManager();
+			PhysicsWorldNetworkManager& physicsManager = getPhysicsWorldNetworkManager();
+
+			// The reliable snapshot must be deserialized first
+			{
+				u8 flags = snapshot.reliableFlags;
+				Deserializer des = startDeserialize(snapshot.reliable.getSize(), snapshot.reliable.getData());
+				if(flags & impl::STATE_SERIALIZED) {
+					u64 stateId;
+					des.object(stateId);
+					transitionState(stateId, true);
+				}
+				if (flags & impl::PHYSICS_SERIALIZED)
+					physicsManager.deserializePhysicsWorldSnapshot(des);
+				if (flags & impl::META_SERIALIZED)
+					worldManager.deserializeEntityComponentMetaSnapshot(des);
+				if (flags & impl::HIGH_PIORITY_SERIALIZED)
+					worldManager.deserializeComponentSnapshot(des);
+
+				if(!endDeserialize(des)) {
+					ae::log(ae::ERROR_SEVERITY_WARNING, "Failed to deserialize reliable snapshot: %i\n", (int)des.adapter().error());
+
+				}
+			}
+
+			if(snapshot.unreliable.getData() != nullptr) {
+				u8 flags = snapshot.unreliableFlags;
+				Deserializer des = startDeserialize(snapshot.unreliable.getSize(), snapshot.unreliable.getData());
+
+				if(flags != 0) {
+					worldManager.deserializeComponentSnapshot(des);
+				}
+
+				if (!endDeserialize(des)) {
+					ae::log(ae::ERROR_SEVERITY_WARNING, "Failed to deserialize unreliable snapshot: %i\n", (int)des.adapter().error());
+
+				}
+			}
+
+			snapshotsQueue.pop();
+			snapshots.erase(currentServerTick);
+		}
+
+		getEntityWorld().enable_range_check(true);
+	}
+
+	void endTick() override {
+	
+	}
+
 protected:
+	struct Snapshot {
+		u8 reliableFlags;
+		MessageBuffer reliable;
+
+		u8 unreliableFlags;
+		MessageBuffer unreliable;
+	};
+
+	std::map<u32, Snapshot> snapshots;
+	std::queue<u32> snapshotsQueue;
+	u32 currentServerTick = 0;
+
+	bool sentFullSnapshotRequest = false;
 	bool failed = false;
 	bool connected = false;
 	HSteamNetConnection conn = k_HSteamNetConnection_Invalid;
 };
 
 /**
- * The server interface creates a server that clients can connect to.
+ * @brief The server interface is one of the two primary interfaces
+ * library-users may inherit from. When the server interface is used
+ * snapshots will be automatically enabled and connecting clients will
+ * be automatically sync'd. 
  * 
- * This particular interface will automatically sync clients with the
- * current flecs::world. 
+ * @note look at the NetworkInterface documentation for what methods
+ * you may override.
  */
 class ServerInterface : public NetworkInterface {
 public:
 	ServerInterface() {
-		networkUpdate.setRate(40.0f);
-		networkUpdate.setFunction([&](float) { syncUpdate(); });
+		networkUpdate.setRate(20.0f);
+		networkUpdate.setFunction([&](float) { snapshotUpdate(); });
+		enableSnapshots();
 	}
 
-	void syncUpdate() {
-		EntityWorldNetworkManager& worldNetworkManager = getEntityWorldNetworkManager();
-		PhysicsWorldNetworkManager& physicsWorldManager = getPhysicsWorldNetworkManager();
+	/**
+	 * @brief Sends the snapshot compilation created within the
+	 * NetworkSnapshotManger and sends it to all clients.
+	 */
+	void snapshotUpdate() {
+		assert(isSnapshotsEnabled());
+		NetworkSnapshotManager& snapshotManager = getNetworkSnapshotManager();
 		NetworkManager& networkManager = getNetworkManager();
 
-		OutputBuffer message;
-		if(physicsWorldManager.isPhysicsWorldSnapshotReady() ||
-		    worldNetworkManager.isEntityComponentMetaSnapshotReady() ||
-			needStateUpdate) {
-			Serializer ser = startSerialize(message);
-			ser.object(MESSAGE_HEADER_STATE_SNAPSHOT);
-			ser.object(getCurrentStateId()); // STATE ID
-			physicsWorldManager.serializePhysicsWorldSnapshot(ser); // PHYSICS
-			worldNetworkManager.serializeEntityComponentMetaSnapshot(ser); // ENTITY COMPONENT
-			endSerialize(ser, message);
-			networkManager.sendMessage(0, std::move(message), true, true);
-			needStateUpdate = false;
+		if(!snapshotManager.hasSnapshotCompilationStarted()) {
+			snapshotManager.beginSnapshotCompilation();
+			return;
 		}
 
-		// send high piority with reliability
-		if(worldNetworkManager.isHighPiorityComponentSnapshotReady()) {
-			Serializer ser = startSerialize(message); // if you see here a warning here ignore it.
-			ser.object(MESSAGE_HEADER_COMPONENT_SNAPSHOT);
-			worldNetworkManager.serializeHighPiorityComponentUpdates(ser);
-			endSerialize(ser, message);
-			networkManager.sendMessage(0, std::move(message), true, true);
-		}
+		snapshotManager.endSnapshotCompilation();
 
-		// send low piority with no reliability
-		if (worldNetworkManager.isLowPiorityComponentSnapshotReady()) {
-			Serializer ser = startSerialize(message); // if you see here a warning here ignore it.
-			ser.object(MESSAGE_HEADER_COMPONENT_SNAPSHOT);
-			worldNetworkManager.serializeLowPiorityComponentUpdates(ser);
-			endSerialize(ser, message);
-			networkManager.sendMessage(0, std::move(message), true);
-		}
+		MessageBuffer& reliableSnapshots = snapshotManager.getReliableSnapshotCompilation();
+		MessageBuffer& unreliableSnapshots = snapshotManager.getUnreliableSnapshotCompilation();
+
+		networkManager.sendMessage(0, std::move(reliableSnapshots), true, true);
+		networkManager.sendMessage(0, std::move(unreliableSnapshots), true, false);
+
+		snapshotManager.beginSnapshotCompilation();
 	}
 
-	// Refer to NetworkManager::sendMessage() for param info
-	// sends a full snapshot to the selected connection or all.
+	/**
+	 * @brief Sends a fullSyncUpdate to "who." This means all currently created
+	 * components, entities, physics objects will be serialized and then sent
+	 * to that connection. This is quite a performance heavy function so use 
+	 * only if requested of the client or when a client joins
+	 * 
+	 * @param who the client/connection to send the update to
+	 */
 	void fullSyncUpdate(HSteamNetConnection who) {
-		getEntityWorldNetworkManager().yeildAllComponenents();
-		getPhysicsWorldNetworkManager().yieldAll();
-		syncUpdate(); 
+		EntityWorldNetworkManager& world = getEntityWorldNetworkManager();
+		PhysicsWorldNetworkManager& physics = getPhysicsWorldNetworkManager();
+
+		world.yeildAllComponenents();
+		physics.yieldAll();
+
+		MessageBuffer buffer;
+		Serializer ser = startSerialize(buffer);
+		ser.object(MESSAGE_HEADER_SNAPSHOT_FULL);
+		ser.object((u64)getCurrentStateId());
+		ser.object((u32)getCurrentTick());
+		physics.serializePhysicsWorldSnapshot(ser);
+		world.serializeEntityComponentMetaSnapshot(ser, true);
+		world.serializeHighPiorityComponentUpdates(ser);
+		endSerialize(ser, buffer);
+
+		getNetworkManager().sendMessage(who, std::move(buffer), false, true);
 	}
 
-	// sets the amount of network updates (flecs::world entity syncing and such)
-	// that are sent per second. High UPS WILL impact performance
+	/**
+	 * @brief affects the call rate of snapshotUpdate. This will dictate
+	 * how many times a second a server update is sent out. Should NEVER
+	 * be higher then tick rate.
+	 * 
+	 * @param ups the new Updates Per Second of the server
+	 */
 	void setNetworkUPS(float ups) {
+		debugWarning(ups > impl::getTickRate(), "UPS(%.0f) should not be higher the TPS(%.0f)\n", ups, impl::getTickRate());
+
 		networkUpdate.setRate(ups);
 	}
 
+	/**
+	 * @brief for servers, this will always return true.
+	 * 
+	 * @return always true
+	 */
 	bool isOpen() final {
 		return true;
 	}
 
+	/**
+	 * @brief has the listen socket failed to open, or in laymen's terms:
+	 * has the server failed to start?
+	 * 
+	 * @return true if the server failed to start, false otherwise.
+	 */
 	bool hasFailed() final {
-		return false;
+		return listen == k_HSteamListenSocket_Invalid;
 	}
 protected:
+	void beginTick() override {
+		getNetworkSnapshotManager().beginSnapshot();
+	}
+
+	void endTick() override {
+		getNetworkSnapshotManager().endSnapshot();
+	}
+
 	bool open(const SteamNetworkingIPAddr& addr, const SteamNetworkingConfigValue_t& opt) {
 		if(listen != k_HSteamListenSocket_Invalid)
 			return false;
@@ -1415,6 +1867,19 @@ protected:
 
 	void close() {
 		impl::getSockets()->CloseListenSocket(listen);
+	}
+
+	bool _internalOnMessageRecieved(HSteamNetConnection conn, MessageHeader header, Deserializer& des, u32 size, const void* data) override {
+		switch(header) {
+		case MESSAGE_HEADER_REQUEST_SNAPSHOT_FULL:
+			fullSyncUpdate(conn);
+			break;
+
+		default:
+			return true;
+		}
+
+		return false;
 	}
 
 	void _internalUpdate() override {

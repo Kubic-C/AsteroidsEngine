@@ -185,4 +185,12 @@ private:
 	std::map<std::string, std::string> decoratorMap;
 } log;
 
+#ifndef NDEBUG
+// if expr is true, log the warning
+#define debugWarning(expr, format, ...) \
+	((expr) ? log(::ae::ERROR_SEVERITY_WARNING, format, __VA_ARGS__) : (void)0 )
+#else
+#define debugWarning(format, ...)
+#endif
+
 AE_NAMESPACE_END

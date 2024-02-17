@@ -261,6 +261,8 @@ public:
 		s.ext(*this, bitsery::ext::BaseClass<Shape>{});
 		s.value1b(verticesCount);
 
+		assert(verticesCount <= 8 && "Vertices exceed max\n");
+
 		for (int i = 0; i < verticesCount; i++) {
 			s.object(vertices[i]);
 		}
