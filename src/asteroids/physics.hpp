@@ -98,21 +98,23 @@ public:
 		markFullDirty();
 	}
 
-	virtual ShapeEnum getType() const = 0;
+    virtual ~Shape() = default;
 
-	virtual float getRadius() const = 0;
+    NODISCARD virtual ShapeEnum getType() const = 0;
+
+    NODISCARD virtual float getRadius() const = 0;
 
 	virtual AABB getAABB() = 0;
 
-	float getRot() const { return rot; }
+    NODISCARD float getRot() const { return rot; }
 	void setRot(float rot) { markLocalDirty(); this->rot = rot; }
 
-	sf::Vector2f getPos() const { return pos; }
-	sf::Vector2f getWeightedPos() const { return pos + getCentroid(); }
-	virtual sf::Vector2f getCentroid() const { return { 0.0f, 0.0f }; }
+	NODISCARD sf::Vector2f getPos() const { return pos; }
+    NODISCARD sf::Vector2f getWeightedPos() const { return pos + getCentroid(); }
+    NODISCARD virtual sf::Vector2f getCentroid() const { return { 0.0f, 0.0f }; }
 	void setPos(sf::Vector2f pos) { markLocalDirty(); this->pos = pos; }
 
-	bool isNetworkDirty() { return localFlags[NETWORK_DIRTY]; }
+    NODISCARD bool isNetworkDirty() { return localFlags[NETWORK_DIRTY]; }
 	void resetNetworkDirty() { localFlags[NETWORK_DIRTY] = false; }
 
 	void markLocalDirty() { localFlags[LOCAL_DIRTY] = true; }
@@ -145,21 +147,21 @@ public:
 	Circle()
 		: Shape(), radius(0.0f) {}
 
-	Circle(float radius)
+	explicit Circle(float radius)
 		: Shape(), radius(radius) {}
 
 	Circle(sf::Vector2f pos, float rot, float radius = 0.0f)
 		: Shape(pos, rot), radius(radius) {}
 
-	virtual ShapeEnum getType() const { return ShapeEnum::Circle; }
+    NODISCARD virtual ShapeEnum getType() const { return ShapeEnum::Circle; }
 
-	float getRadius() const override { return radius; }
+    NODISCARD float getRadius() const override { return radius; }
 
-	AABB getAABB() override {
+    NODISCARD AABB getAABB() override {
 		return AABB(getRadius(), getRadius(), pos);
 	}
 
-	void setRadius(float radius) { this->radius = radius; markFullDirty(); }
+	void setRadius(float newRadius) { radius = newRadius; markFullDirty(); }
 
 	template<typename S>
 	void serialize(S& s) {
@@ -181,7 +183,7 @@ public:
 	Polygon(const std::initializer_list<sf::Vector2f>& localVertices)
 		: Shape(), verticesCount((u8)localVertices.size()) {
 		memcpy(vertices.data(), localVertices.begin(), verticesCount * sizeof(sf::Vector2f));
-		fixVertices();
+		fixVertices(); // radius initialized here
 	}
 
 	Polygon(sf::Vector2f pos, float rot)
@@ -191,16 +193,16 @@ public:
 	Polygon(sf::Vector2f pos, float rot, const std::initializer_list<sf::Vector2f>& localVertices)
 		: Shape(pos, rot), verticesCount((u8)localVertices.size()) {
 		memcpy(vertices.data(), localVertices.begin(), verticesCount * sizeof(sf::Vector2f));
-		fixVertices();
+		fixVertices();// radius initialized here
 	}
 
-	virtual sf::Vector2f getCentroid() const override { return centroid; }
+	NODISCARD virtual sf::Vector2f getCentroid() const override { return centroid; }
 
-	virtual ShapeEnum getType() const { return ShapeEnum::Polygon; }
+    NODISCARD virtual ShapeEnum getType() const { return ShapeEnum::Polygon; }
 
-	float getRadius() const override { return radius; }
+    NODISCARD float getRadius() const override { return radius; }
 
-	AABB getAABB() override {
+    NODISCARD AABB getAABB() override {
 		AABB aabb;
 
 		aabb.min[0] = std::numeric_limits<float>::max();
@@ -238,18 +240,18 @@ public:
 		computeWorldVertices();
 	}
 
-	u8 getVerticeCount() const {
+    NODISCARD u8 getVerticeCount() const {
 		return verticesCount;
 	}
 
-	vertices_t getWorldVertices() {
+    NODISCARD vertices_t getWorldVertices() {
 		if (localFlags[LOCAL_DIRTY])
 			computeWorldVertices();
 
 		return IndirectContainer<sf::Vector2f>(verticesCount, cache.vertices.data());
 	}
 
-	vertices_t getWorldNormals() {
+    NODISCARD vertices_t getWorldNormals() {
 		if (localFlags[LOCAL_DIRTY])
 			computeWorldVertices();
 

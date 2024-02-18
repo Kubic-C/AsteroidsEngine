@@ -6,21 +6,21 @@ AE_NAMESPACE_BEGIN
 
 struct TransformComponent : public NetworkedComponent {
 public:
-    sf::Vector2f getUnweightedPos() const { return pos; }
-    sf::Vector2f getPos() const { return pos + origin; }
-    void setPos(sf::Vector2f pos) { 
-        lastPos = this->pos;
-        this->pos = pos - origin; 
+    NODISCARD sf::Vector2f getUnweightedPos() const { return pos; }
+    NODISCARD sf::Vector2f getPos() const { return pos + origin; }
+    void setPos(sf::Vector2f newPos) {
+        lastPos = pos;
+        pos = newPos - origin;
     }
 
-    float getRot() const { return rot; }
-    void setRot(float rot) { 
-        lastRot = this->rot;
-        this->rot = rot; 
+    NODISCARD float getRot() const { return rot; }
+    void setRot(float newRot) {
+        lastRot = rot;
+        rot = newRot;
     }
 
-    sf::Vector2f getOrigin() const { return origin; }
-    void setOrigin(sf::Vector2f origin) { this->origin = origin; }
+    NODISCARD sf::Vector2f getOrigin() const { return origin; }
+    void setOrigin(sf::Vector2f newOrigin) { origin = newOrigin; }
 
     template<typename S>
     void serialize(S& s) {
@@ -29,7 +29,7 @@ public:
         s.object(origin);
     }
 
-    bool isSameAsLast() const {
+    NODISCARD bool isSameAsLast() const {
         return lastPos == pos && lastRot == rot;
     }
 
@@ -44,16 +44,16 @@ private:
 
 struct IntegratableComponent : public NetworkedComponent {
 public:
-    sf::Vector2f getLinearVelocity() const { return linearVelocity; }
+    NODISCARD sf::Vector2f getLinearVelocity() const { return linearVelocity; }
 
     void addLinearVelocity(sf::Vector2f vel) {
         setLast();
         linearVelocity += vel;
     }
 
-    float getAngularVelocity() const { return angularVelocity; }
+    NODISCARD float getAngularVelocity() const { return angularVelocity; }
 
-    bool isSameAsLast() const {
+    NODISCARD bool isSameAsLast() const {
         return angularVelocity == lastAngularVelocity && lastLinearVelocity == linearVelocity;
     }
 
@@ -79,13 +79,13 @@ private:
 struct TimedDeleteComponent {
     TimedDeleteComponent() 
         : timeLeft(0.0f) {}
-    TimedDeleteComponent(float time)
+    explicit TimedDeleteComponent(float time)
         : timeLeft(time) {}
 
-    float getTime() const { return timeLeft; }
+    NODISCARD float getTime() const { return timeLeft; }
     void setTime(float time) { timeLeft = time;}
     void subtractTime(float amount)  { timeLeft -= amount; }
-    bool isTimeDone() const { return timeLeft <= 0.0f; }
+    NODISCARD bool isTimeDone() const { return timeLeft <= 0.0f; }
 
 private:
     float timeLeft;
@@ -265,7 +265,7 @@ struct CoreModule {
     inline static flecs::entity mainPhysics;
     inline static flecs::entity postPhysics;
 
-    CoreModule(flecs::world& world) {
+    explicit CoreModule(flecs::world& world) {
         treeClear = world.entity()
             .add(flecs::Phase)
             .depends_on(flecs::OnUpdate);
@@ -298,6 +298,8 @@ struct CoreModule {
         manager.registerComponent<TransformComponent>();
         manager.registerComponent<ShapeComponent>(ComponentPiority::High);
         manager.registerComponent<IntegratableComponent>();
+
+        getEntityWorld().observer<ShapeComponent>().event(flecs::OnRemove).iter(impl::onShapeDestroy);
 
         getEntityWorld().enable_range_check(true);
     }

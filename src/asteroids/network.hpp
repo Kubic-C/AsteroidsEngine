@@ -44,7 +44,7 @@ AE_NAMESPACE_BEGIN
 /**
  * MessageBuffer is a simple dynamic array where elements cannot be removed, only added.
  * 
- * Its purpose is to comply with the GameNeworkingSockets interface. Unlike std::vector<>
+ * Its purpose is to comply with the GameNetworkingSockets interface. Unlike std::vector<>
  * MessageBuffer can let go ownership of the data. This is important
  * because when sending a message that data must be valid for the entirety of it until
  * its free callback is called (SteamNetworkingMessage::m_pfnFreeData). std::vector<>
@@ -65,8 +65,8 @@ public:
 	}
 
 
-	MessageBuffer(MessageBuffer&& other) noexcept {
-		setData(other.size, other.data, true);
+	MessageBuffer(MessageBuffer&& other) noexcept
+        : capacity(other.capacity), size(other.size), data(other.data), hasOwnership(true) {
 		other.setOwner(false);
 		other.reset();
 	}
@@ -77,28 +77,21 @@ public:
 		}
 	}
 
-	size_t getSize() const { return size; }
-	const u8* getData() const { return data; }
+    NODISCARD size_t getSize() const { return size; }
+    NODISCARD const u8* getData() const { return data; }
 	u8* getData() { return data; }
-	bool isOwner() const { return hasOwnership; }
+    NODISCARD bool isOwner() const { return hasOwnership; }
 
 	// will this resource automatically be free'd?
 	void setOwner(bool isOwner) {
 		hasOwnership = isOwner;
 	}
 
-	void copyData(size_t size, const u8* src) {
-		hasOwnership = true;
-
-		resize(size);
-		memcpy(data, src, size);
-	}
-
-	void setData(size_t size, u8* data, bool hasOwnership = true) {
-		this->capacity = size;
-		this->size = size;
-		this->data = data;
-		this->hasOwnership = hasOwnership;
+	void setData(size_t newSize, u8* newData, bool isOwner = true) {
+		this->capacity = newSize;
+		this->size = newSize;
+		this->data = newData;
+		this->hasOwnership = isOwner;
 	}
 
 	void resize(size_t newSize) {
@@ -147,12 +140,8 @@ public:
 	}
 
 	u8& operator[](size_t index) {
-		if (index > size - 1) {
-			log(ERROR_SEVERITY_FATAL, "MessageBuffer: Index out of bounds\n");
-		}
-		if (!data) {
-			log(ERROR_SEVERITY_FATAL, "MessageBuffer: No data allocated\n");
-		}
+		assert(data);
+        assert(index < size - 1);
 
 		return data[index];
 	}
@@ -160,19 +149,17 @@ public:
 public: // for std
 	u8* begin() { return data; }
 	u8* end() { return data + size; }
-	const u8* cbegin() const { return data; }
-	const u8* cend() const { return data + size; }
 
 protected:
 	// Will allocate if data is nullptr
 	//	size: the new capacity
 	// note: this->size will be set to zero
-	bool allocateIfNoData(size_t size) {
+	bool allocateIfNoData(size_t newSize) {
 		if (data)
 			return false;
 
-		data = new u8[size];
-		capacity = size;
+		data = new u8[newSize];
+		capacity = newSize;
 		size = 0;
 		hasOwnership = true;
 		return true;
@@ -193,59 +180,34 @@ typedef ::bitsery::Deserializer<InputAdapter> Deserializer;
 
 AE_NAMESPACE_END
 
-namespace bitsery {
-	namespace traits {
-		//template<>
-		//struct BufferAdapterTraits<InputBuffer> {
-		//	using TIterator = const uint8_t*;
-		//	using TConstIterator = const uint8_t*;
-		//	using TValue = uint8_t;
-		//};
+namespace bitsery::traits {
+    template<>
+    struct BufferAdapterTraits<::ae::MessageBuffer> {
+        using TIterator = uint8_t*;
+        using TConstIterator = const uint8_t*;
+        using TValue = uint8_t;
 
-		//template<>
-		//struct ContainerTraits<InputBuffer> {
-		//	using TValue = uint8_t;
+        static void increaseBufferSize(::ae::MessageBuffer& buffer, size_t currOffset, size_t newOffset) {
+            buffer.addSize((u32)newOffset - (u32)currOffset);
+        }
+    };
 
-		//	static constexpr bool isResizable = false;
-		//	static constexpr bool isContiguous = true;
+    template<>
+    struct ContainerTraits<::ae::MessageBuffer> {
+        using TValue = uint8_t;
 
-		//	static void resize(InputBuffer&, size_t) {
-		//		engineLog(ERROR_SEVERITY_FATAL, "(bitsery) Attempted to resize on an indirect container\n");
-		//	}
-		//	// get container size
-		//	static size_t size(const InputBuffer& buf) {
-		//		return buf.size();
-		//	}
-		//};
+        static constexpr bool isResizable = true;
+        static constexpr bool isContiguous = true;
 
-		template<>
-		struct BufferAdapterTraits<::ae::MessageBuffer> {
-			using TIterator = uint8_t*;
-			using TConstIterator = const uint8_t*;
-			using TValue = uint8_t;
+        static void resize(::ae::MessageBuffer& buffer, size_t newSize) {
+            buffer.resize(newSize);
+        }
 
-			static void increaseBufferSize(::ae::MessageBuffer& buffer, size_t currOffset, size_t newOffset) {
-				buffer.addSize((u32)newOffset - (u32)currOffset);
-			}
-		};
-
-		template<> 
-		struct ContainerTraits<::ae::MessageBuffer> {
-			using TValue = uint8_t;
-
-			static constexpr bool isResizable = true;
-			static constexpr bool isContiguous = true;
-
-			static void resize(::ae::MessageBuffer& buffer, size_t newSize) {
-				buffer.resize(newSize);
-			}
-
-			// get container size
-			static size_t size(const ::ae::MessageBuffer& buf) {
-				return buf.getSize();
-			}
-		};
-	}
+        // get container size
+        static size_t size(const ::ae::MessageBuffer& buf) {
+            return buf.getSize();
+        }
+    };
 }
 
 AE_NAMESPACE_BEGIN
@@ -284,13 +246,6 @@ void serialize(S& s, MessageHeader& header) {
 	s.value1b(header);
 }
 
-struct Message {
-	HSteamNetConnection who = 0;
-	MessageBuffer data;
-	bool sendAll = false;
-	bool sendReliable = false;
-};
-
 namespace impl {
 	ISteamNetworkingUtils* getUtils();
 	ISteamNetworkingSockets* getSockets();
@@ -314,6 +269,8 @@ PhysicsWorldNetworkManager& getPhysicsWorldNetworkManager();
 class NetworkInterface {
 	friend class NetworkManager;
 public:
+    virtual ~NetworkInterface() = default;
+
 	virtual void update() {};
 	virtual bool shouldAcceptConnection(HSteamNetConnection conn) { return true; }
 	virtual void onConnectionJoin(HSteamNetConnection conn) {}
@@ -340,7 +297,7 @@ protected:
 
 public:
 	// returns true if the message can't be used
-	virtual bool _internalOnMessageRecieved(HSteamNetConnection conn, MessageHeader header, Deserializer& deserializer, u32 size, const void* data) {
+	virtual bool _internalOnMessageRecieved(HSteamNetConnection conn, MessageHeader header, Deserializer& deserializer) {
 		return true;
 	}
 
@@ -382,7 +339,7 @@ public:
 	}
 
 	void setNetworkInterface(std::shared_ptr<NetworkInterface> newInterface) {
-		networkInterface = newInterface;
+		networkInterface = std::move(newInterface);
 	}
 
 	NetworkInterface& getNetworkInterface() const {
@@ -442,7 +399,7 @@ public:
 			// AT A MINIMUM 1 heap call but possibly up whatever the max connections is PLUS copying the contents of MessageBuffer everwhere
 			// ---
 			// that the former is much faster.
-			impl::MessageBufferMeta* meta = new impl::MessageBufferMeta;
+			auto meta = new impl::MessageBufferMeta;
 			messageBuffer.setOwner(false);
 
 			for (auto& pair : connections) {
@@ -460,7 +417,7 @@ public:
 
 				message.m_pfnFreeData = 
 					[](ISteamNetworkingMessage* message){
-						impl::MessageBufferMeta* meta = (impl::MessageBufferMeta*)message->m_nUserData;
+						auto meta = (impl::MessageBufferMeta*)message->m_nUserData;
 
 						meta->messagesFreed++;
 						if(meta->messagesFreed == meta->messagesSent) {
@@ -500,12 +457,6 @@ public:
 		}
 	}
 
-	void sendMessage(Message&& moveMessage) {
-		Message message = std::move(moveMessage);
-
-		sendMessage(message.who, std::move(message.data), message.sendAll, message.sendReliable);
-	}
-
 	void update() {
 		if(!hasNetworkInterface())
 			return;
@@ -518,7 +469,7 @@ public:
 			MessageHeader header = MESSAGE_HEADER_INVALID;
 
 			des.object(header);
-			if(networkInterface->_internalOnMessageRecieved(message->m_conn, header, des, message->GetSize(), message->GetData()))
+			if(networkInterface->_internalOnMessageRecieved(message->m_conn, header, des))
 				networkInterface->onMessageRecieved(message->m_conn, header, des);
 			
 			if(!endDeserialize(des)) {
@@ -645,18 +596,6 @@ protected:
 
 /* Network Syncing */
 
-extern flecs::world& getEntityWorld();
-
-struct u32Hasher {
-	std::size_t operator()(std::vector<u32> const& vec) const {
-		std::size_t seed = vec.size();
-		for (const auto& i : vec) {
-			seed ^= i + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-		}
-		return seed;
-	}
-};
-
 struct NetworkedEntity {};
 struct NetworkedComponent {};
 
@@ -673,7 +612,7 @@ struct NoPhase {};
 extern u64 getCurrentTick();
 
 class EntityWorldNetworkManager {
-	bool isIdValid(u32 id) {
+	static bool isIdValid(u32 id) {
 		return impl::af(id) != 0;
 	}
 
@@ -712,19 +651,19 @@ public:
 	}
 
 	bool isHighPiorityComponentSnapshotReady() {
-		return highPiorityComponentsUpdates.size();
+		return !highPiorityComponentsUpdates.empty();
 	}
 
 	bool isLowPiorityComponentSnapshotReady() {
-		return lowPiorityComponentsUpdates.size();
+		return !lowPiorityComponentsUpdates.empty();
 	}
 
 	bool isEntityComponentMetaSnapshotReady() {
-		return (bool)componentsCreated.size() ||
-			   (bool)componentsDestroyed.size() ||
-			   (bool)entitiesDestroyed.size() ||
-			   (bool)entitiesEnabled.size() ||
-			   (bool)entitiesDisabled.size();
+		return !componentsCreated.empty() ||
+			   !componentsDestroyed.empty() ||
+			   !entitiesDestroyed.empty() ||
+			   !entitiesEnabled.empty() ||
+			   !entitiesDisabled.empty();
 	}
 
 	void serializeEntityComponentMetaSnapshot(Serializer& ser, bool noDestroyed = false) {
@@ -740,12 +679,12 @@ public:
 		// It is also makes more sense on the deserialization side because it needs to handle
 		// one component/entity at a time instead of all at once.
 		// 
-		// Is it boiler plate? 
+		// Is it boilerplate?
 		//	Yes it is. 
 		// Do I care? 
 		//	No. 
-		// Will I write a 4 line helper function that will solve the boiler plate? 
-		//	No I dont think I will.
+		// Will I write a 4 line helper function that will solve the boilerplate?
+		//	No I don't think I will.
 
 		// Must serialize: 
 		//  - Created Components
@@ -771,8 +710,8 @@ public:
 			// Serialize the order of components
 			const std::vector<u32>& componentTypes = pair.first;
 			ser.object((u32)componentTypes.size()); // entity component type count
-			for (u32 i = 0; i < componentTypes.size(); i++) { // entity component types
-				ser.object(componentTypes[i]);
+			for (u32 compType : componentTypes) { // entity component types
+				ser.object(compType);
 			}
 
 			// Then serialize all entity-components
@@ -805,8 +744,8 @@ public:
 			// Serialize the order of components
 			const std::vector<u32>& componentTypes = pair.first;
 			ser.object((u32)componentTypes.size()); // entity component type count
-			for (u32 i = 0; i < componentTypes.size(); i++) { // entity component types
-				ser.object(componentTypes[i]);
+			for (u32 compType : componentTypes) { // entity component types
+				ser.object(compType);
 			}
 
 			// Then serialize all entity-components
@@ -879,8 +818,6 @@ public:
 			} 
 		}
 	}
-
-	u64 lastTick;
 
 	void deserializeEntityComponentMetaSnapshot(Deserializer& des) {
 		flecs::world& world = getEntityWorld();
@@ -1009,16 +946,16 @@ public:
 		componentId.is_a<NetworkedComponent>();
 
 		allEntityManagement.push_back(
-			world.observer().term<T>
+			world.observer().term<T>()
 			.event(flecs::OnAdd).each([rawId, this](flecs::entity e) {
 				componentsCreated[impl::cf(e)].insert(rawId);
-			}));
+        }));
 
 		allEntityManagement.push_back(
-			world.observer().term<T>
+			world.observer().term<T>()
 			.event(flecs::OnRemove).each([rawId, this](flecs::entity e){
 				componentsDestroyed[impl::cf(e)].insert(rawId);
-			}));
+        }));
 
 		registerIfNonEmptyComponent<T>(rawId, piority, std::is_empty<T>());
 
@@ -1035,7 +972,7 @@ public:
 		entitiesDisabled.push_back(impl::cf(entity));
 	}
 
-	flecs::entity entity() {
+	static flecs::entity entity() {
 		return getEntityWorld().entity().add<NetworkedEntity>();
 	}
 
@@ -1056,6 +993,8 @@ protected:
 			.each([rawId, this](flecs::entity e) {
 				componentsCreated[impl::cf(e)].insert(rawId);
 			}));
+
+        (void)piority;
 	}
 
 	template<typename T>
@@ -1137,8 +1076,8 @@ protected:
 			// Serialize the order of components
 			const std::vector<u32>& componentTypes = pair.first;
 			ser.object((u32)componentTypes.size()); // entity component type count
-			for (u32 i = 0; i < componentTypes.size(); i++) { // entity component types
-				ser.object(componentTypes[i]);
+			for (u32 compType : componentTypes) { // entity component types
+				ser.object(compType);
 			}
 
 			// Then serialize all entity-components
@@ -1195,7 +1134,7 @@ protected:
 struct ShapeComponent : public NetworkedComponent {
 	u32 shape = UINT32_MAX;
 
-	bool isValid() {
+	NODISCARD bool isValid() const {
 		return shape != UINT32_MAX && getPhysicsWorld().doesShapeExist(shape);
 	}
 
@@ -1225,7 +1164,7 @@ public:
 			}
 			});
 
-		return shapeUpdates.size() > 0;
+		return !shapeUpdates.empty();
 	}
 
 	void yieldAll() {
@@ -1261,7 +1200,7 @@ public:
 		}
 	}
 
-	void deserializePhysicsWorldSnapshot(Deserializer& des) {
+	static void deserializePhysicsWorldSnapshot(Deserializer& des) {
 		PhysicsWorld& physicsWorld = getPhysicsWorld();
 
 		u32 listSize;
@@ -1319,7 +1258,7 @@ namespace impl {
 		HIGH_PIORITY_SERIALIZED = 1 << 3,
 		LOW_PIORITY_SERIALIZED = 1 << 4
 	};
-};
+}
 
 /**
  * The snapshot manager is responsible for putting together
@@ -1338,7 +1277,7 @@ public:
 		return unreliableSnapshots;
 	}
 
-	void serializeFullSnapshot(MessageBuffer& buffer) {
+	static void serializeFullSnapshot(MessageBuffer& buffer) {
 		EntityWorldNetworkManager& world = getEntityWorldNetworkManager();
 		PhysicsWorldNetworkManager& physics = getPhysicsWorldNetworkManager();
 
@@ -1351,6 +1290,7 @@ public:
 		physics.serializePhysicsWorldSnapshot(ser);
 		world.serializeEntityComponentMetaSnapshot(ser, true);
 		world.serializeHighPiorityComponentUpdates(ser);
+        endSerialize(ser, buffer);
 	}
 
 	void beginSnapshotCompilation() {
@@ -1380,7 +1320,7 @@ public:
 		unreliableSnapshots.reset();
 	}
 
-	bool hasSnapshotCompilationStarted() {
+	bool hasSnapshotCompilationStarted() const {
 		return compilationStarted;
 	}
 
@@ -1479,7 +1419,7 @@ private:
 
 		reliableSnapshotser.object(snapshotFlags);
 
-		u32 size = 0;
+		u32 snapshotSize = 0;
 		OutputAdapter& adapter = reliableSnapshotser.adapter();
 		u32 prevWritePos = adapter.currentWritePos();
 		reliableSnapshotser.object<u32>(0);
@@ -1495,14 +1435,13 @@ private:
 
 		u32 postWritePos = adapter.currentWritePos();
 		adapter.currentWritePos(prevWritePos);
-		size = postWritePos - prevWritePos - sizeof(u32);
-		reliableSnapshotser.object(size);
+        snapshotSize = postWritePos - prevWritePos - sizeof(u32);
+		reliableSnapshotser.object(snapshotSize);
 		adapter.currentWritePos(postWritePos);
 	}
 
 	void serializeUnreliableSnapshot() {
 		EntityWorldNetworkManager& worldManager = getEntityWorldNetworkManager();
-		PhysicsWorldNetworkManager& physicsManager = getPhysicsWorldNetworkManager();
 
 		u8 snapshotFlags = 0;
 		if (worldManager.isLowPiorityComponentSnapshotReady())
@@ -1510,7 +1449,7 @@ private:
 
 		unreliableSnapshotser.object(snapshotFlags);
 
-		u32 size = 0;
+		u32 snapshotSize = 0;
 		OutputAdapter& adapter = unreliableSnapshotser.adapter();
 		u32 prevWritePos = adapter.currentWritePos();
 		unreliableSnapshotser.object<u32>(0);
@@ -1521,8 +1460,8 @@ private:
 
 		u32 postWritePos = adapter.currentWritePos();
 		adapter.currentWritePos(prevWritePos);
-		size = postWritePos - prevWritePos - sizeof(u32); // Don't include the size of SIZE
-		unreliableSnapshotser.object(size);
+        snapshotSize = postWritePos - prevWritePos - sizeof(u32); // Don't include the size of SIZE
+		unreliableSnapshotser.object(snapshotSize);
 		adapter.currentWritePos(postWritePos);
 	}
 private:
@@ -1536,7 +1475,6 @@ private:
 };
 
 extern void enableSnapshots();
-extern void disableSnapshots();
 extern NetworkSnapshotManager& getNetworkSnapshotManager();
 extern bool isSnapshotsEnabled();
 
@@ -1551,6 +1489,8 @@ extern bool isSnapshotsEnabled();
  */
 class ClientInterface : public NetworkInterface {
 public:
+    virtual ~ClientInterface() = default;
+
 	/* When an entity is by the client, it will start at this range.
 	   I.E. the default client range for created entites. */
 	static constexpr u64 defaultLocalEntityRange = 1000000;
@@ -1594,7 +1534,7 @@ public:
 	}
 
 protected:
-	bool open(const SteamNetworkingIPAddr& addr, const SteamNetworkingConfigValue_t& opt) {
+	bool open(const SteamNetworkingIPAddr& addr, const SteamNetworkingConfigValue_t& opt) override {
 		if (conn != k_HSteamNetConnection_Invalid)
 			return false;
 
@@ -1616,9 +1556,9 @@ protected:
 		return true;
 	}
 
-	void acceptConnection(HSteamNetConnection conn) override {}
+	void acceptConnection(HSteamNetConnection newConn) override {}
 
-	void closeConnection(HSteamNetConnection conn) override {
+	void closeConnection(HSteamNetConnection oldConn) override {
 		if(!connected) {
 			failed = true;
 		}
@@ -1628,24 +1568,22 @@ protected:
 		this->conn = k_HSteamNetConnection_Invalid;
 	}
 
-	void close() {
+	void close() override {
 		conn = k_HSteamNetConnection_Invalid;
 	}
 
-	void _internalOnConnectionJoin(HSteamNetConnection conn) override {
+	void _internalOnConnectionJoin(HSteamNetConnection newConn) override {
 		connected = true;
 	}
 
-	bool _internalOnMessageRecieved(HSteamNetConnection conn, MessageHeader header, Deserializer& des, u32 size, const void* data) override {
-		flecs::world& world = getEntityWorld();
-
+	bool _internalOnMessageRecieved(HSteamNetConnection newConn, MessageHeader header, Deserializer& des) override {
 		switch (header) {
 		case MESSAGE_HEADER_SNAPSHOT_COMPILATION_RELIABLE: {
-			deserializeReliableSnapshotCompilation(des, data);
+			deserializeReliableSnapshotCompilation(des);
 		} break;
 
 		case MESSAGE_HEADER_SNAPSHOT_COMPILATION_UNRELIABLE: {
-			deserializeUnreliableSnapshotCompilation(des, data);
+			deserializeUnreliableSnapshotCompilation(des);
 		} break;
 
 		case MESSAGE_HEADER_SNAPSHOT_FULL: {
@@ -1657,7 +1595,6 @@ protected:
 			NetworkSnapshotManager::deserializeFullSnapshot(des);
 		} break;
 
-		snapshotArrivedLate:
 		default:
 			return true;
 		}
@@ -1698,7 +1635,7 @@ protected:
 	}
 
 private:
-	void deserializeReliableSnapshotCompilation(Deserializer& des, const void* data) {
+	void deserializeReliableSnapshotCompilation(Deserializer& des) {
 		u64 tickNum;
 		NetworkSnapshotManager::deserializeSnapshotCompilationHeader(des, tickNum);
 
@@ -1713,7 +1650,7 @@ private:
 		}
 	}
 
-	void deserializeUnreliableSnapshotCompilation(Deserializer& des, const void* data) {
+	void deserializeUnreliableSnapshotCompilation(Deserializer& des) {
 		u64 tickNum;
 		NetworkSnapshotManager::deserializeSnapshotCompilationHeader(des, tickNum);
 
@@ -1767,6 +1704,8 @@ public:
 		networkUpdate.setFunction([&](float) { snapshotUpdate(); });
 		enableSnapshots();
 	}
+
+    virtual ~ServerInterface() = default;
 
 	/**
 	 * @brief Sends the snapshot compilation created within the
@@ -1850,7 +1789,7 @@ protected:
 		getNetworkSnapshotManager().endSnapshot();
 	}
 
-	bool open(const SteamNetworkingIPAddr& addr, const SteamNetworkingConfigValue_t& opt) {
+	bool open(const SteamNetworkingIPAddr& addr, const SteamNetworkingConfigValue_t& opt) override {
 		if(listen != k_HSteamListenSocket_Invalid)
 			return false;
 
@@ -1871,11 +1810,11 @@ protected:
 		impl::getSockets()->CloseConnection(conn, 0, nullptr, false);
 	}
 
-	void close() {
+	void close() override {
 		impl::getSockets()->CloseListenSocket(listen);
 	}
 
-	bool _internalOnMessageRecieved(HSteamNetConnection conn, MessageHeader header, Deserializer& des, u32 size, const void* data) override {
+	bool _internalOnMessageRecieved(HSteamNetConnection conn, MessageHeader header, Deserializer& des) override {
 		switch(header) {
 		case MESSAGE_HEADER_REQUEST_SNAPSHOT_FULL:
 			fullSyncUpdate(conn);
@@ -1889,9 +1828,6 @@ protected:
 	}
 
 	void _internalUpdate() override {
-		if(hasStateChanged())
-			needStateUpdate = true;
-
 		networkUpdate.update();
 	}
 
@@ -1899,7 +1835,6 @@ protected:
 	HSteamListenSocket listen = k_HSteamListenSocket_Invalid;
 
 private:
-	bool needStateUpdate = false;
 	Ticker<void(float)> networkUpdate;
 };
 

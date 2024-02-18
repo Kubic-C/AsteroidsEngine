@@ -16,26 +16,15 @@ namespace impl {
 	}
 }
 
+template<typename ... Params>
+inline std::string formatString(const std::string& format, Params&& ... args) {
 
-inline std::string vformatString(const char* format, va_list args) {
-	std::string str = "";
+    int size_s = std::snprintf( nullptr, 0, format.c_str(), args ... ) + 1;
+    auto size = static_cast<size_t>( size_s );
+    std::unique_ptr<char[]> buf( new char[ size ] );
+    std::snprintf( buf.get(), size, format.c_str(), args ... );
 
-	int requiredSize = vsnprintf(nullptr, 0, format, args);
-	str.resize(requiredSize);
-	vsnprintf(str.data(), str.size() + 1, format, args);
-
-	return str;
-}
-
-inline std::string formatString(const char* format, ...) {
-	std::string str = "";
-
-	va_list args;
-	va_start(args, format);
-	str = vformatString(format, args);
-	va_end(args);
-
-	return str;
+    return { buf.get(), buf.get() + size - 1 };
 }
 
 enum ErrorSeverity {
@@ -103,21 +92,15 @@ public:
 	}
 
 	// Will simply print to the console
-	void operator()(const char* format, ...) {
-		va_list args;
-
-		va_start(args, format);
-		_log(ERROR_SEVERITY_NONE, format, args);
-		va_end(args);
+    template<typename ... Params>
+	void operator()(const char* format, Params&& ... args) {
+		_log(ERROR_SEVERITY_NONE, format, args...);
 	}
 
 	// Will print to the console but may throw an exception depending on the severity level
-	void operator()(ErrorSeverity severity, const char* format, ...) {
-		va_list args;
-
-		va_start(args, format);
-		_log(severity, format, args);
-		va_end(args);
+    template<typename ... Params>
+	void operator()(ErrorSeverity severity, const char* format, Params&& ... args) {
+		_log(severity, format, args...);
 	}
 
 private:
@@ -161,7 +144,8 @@ private:
 		return newFormat;
 	}
 
-	void _log(ErrorSeverity severity, const char* cFormat, va_list args) {
+    template<typename ... Params>
+	void _log(ErrorSeverity severity, const char* cFormat, Params&& ... args) {
 		std::string output(cFormat);
 		
 		if(severity == ERROR_SEVERITY_FATAL)
@@ -169,10 +153,10 @@ private:
 		else if(severity == ERROR_SEVERITY_WARNING)
 			output.insert(0, "<yellow>Warning: <reset>");
 		if(logFile.is_open())
-			logFile << vformatString(parseForDecorators(output, true).c_str(), args);
-		output = vformatString(parseForDecorators(output).c_str(), args);
+			logFile << formatString(parseForDecorators(output, true), args...);
+		output = formatString(parseForDecorators(output), args...);
 
-		printf(output.c_str());
+		std::cout << output;
 
 		handleError(severity, output);
 	}

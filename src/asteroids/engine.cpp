@@ -48,7 +48,7 @@ namespace impl {
 		if(validState((u64)typeId.hash_code()))
 			log(ERROR_SEVERITY_FATAL, "State already registered: %s: %llu\n", typeId.name(), (u64)typeId.hash_code());
 
-		engine->states[(u64)typeId.hash_code()].state = ptr;
+		engine->states[(u64)typeId.hash_code()].state = std::move(ptr);
 
 		return (u64)typeId.hash_code();
 	}
@@ -82,7 +82,7 @@ namespace impl {
 		NetworkManager& networkManager = *engine->networkManager;
 		if (networkManager.hasNetworkInterface()) {
 			NetworkInterface& interface = networkManager.getNetworkInterface();
-			std::type_index id = std::type_index(typeid(interface));
+			auto id = std::type_index(typeid(interface));
 
 			if (prevState.networkModules.find(id) != prevState.networkModules.end()) {
 				prevState.networkModules[id].disable();
@@ -113,7 +113,7 @@ namespace impl {
 		sf::Event event;
 		while(engine->window->pollEvent(event)) {
 			switch(event.type) {
-			case event.Closed:
+            case sf::Event::Closed:
 				engine->entityWorld.quit();
 				break;
 			default:

@@ -50,6 +50,8 @@ typedef int16_t  i16;
 typedef int32_t  i32;
 typedef int64_t  i64;
 
+#define NODISCARD [[nodiscard]]
+
 #define AE_NAME AsteroidsEngine
 #define AE_BUILD 1
 

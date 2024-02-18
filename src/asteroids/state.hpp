@@ -6,6 +6,8 @@ AE_NAMESPACE_BEGIN
 
 class State {
 public:
+    virtual ~State() = default;
+
 	virtual void onEntry() {}
 	virtual void onLeave() {}
 	virtual void onTick(float deltaTime) {}
