@@ -3,7 +3,7 @@
 The Asteroids engine is a C++ 2D engine.
 
 Features:
-  * Simplistic Networking interface
+  * Simplistic Networking interface (with automatic syncing of entities and components, and is quite resilient to lag)
   * Networked components and entities
   * Networked 2D physics
   * GUI system (powered by TGUI)
@@ -25,6 +25,6 @@ There are many libraries that the asteroids engine uses:
   * GameNetworkingSockets: Steam's networking library, used for of course networking
   * SFML: Audio, Window, Rendering handling
   * TGUI: GUI handling
-  * THST: Spatial partioning library
+  * THST: Spatial partitioning library
 
 GameNetworkingSockets requires some extra initialization with vcpkg.
