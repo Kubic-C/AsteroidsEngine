@@ -12,10 +12,6 @@ Features:
 
 The engine is named after where it originated from, the game Asteroids. 
 _**Documentation is a work in progress,**_ but most of the code is self-explanatory.
-
-The engine cannot currently be built with, or may be hard to build with MinGW compilers.
-The reason is GameNetworkingSockets, there is some trouble compiling with the libraries
-that GameNetworkingSockets needs.
   
 ## Libraries
 
