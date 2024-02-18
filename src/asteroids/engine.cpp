@@ -174,10 +174,10 @@ void init() {
 	engine->util->SetConfigValue(k_ESteamNetworkingConfig_SendBufferSize, k_ESteamNetworkingConfig_Global, 0,  k_ESteamNetworkingConfig_Int32, &maxMessageSize);
 
 	// For testing the network :)
-	float FakePacketLoss_Send      = 20;
-	float FakePacketLoss_Recv      = 00;
-	i32   FakePacketLag_Send       = 10;
-	i32   FakePacketLag_Recv       = 10;
+	float FakePacketLoss_Send      = 0;
+	float FakePacketLoss_Recv      = 0;
+	i32   FakePacketLag_Send       = 0;
+	i32   FakePacketLag_Recv       = 0;
 	float FakePacketReorder_Send   = 0;
 	float FakePacketReorder_Recv   = 0;
 	i32   FakePacketReorder_Time   = 0;

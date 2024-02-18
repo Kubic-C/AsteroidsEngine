@@ -1312,15 +1312,12 @@ extern void transitionState(u64 id, bool immediate);
 extern bool hasStateChanged();
 
 namespace impl {
-	enum ReliableSnapshotBitIndexes : u8 {
+	enum SnapshotBitIndexes : u8 {
 		STATE_SERIALIZED = 1 << 0,
 		PHYSICS_SERIALIZED = 1 << 1,
 		META_SERIALIZED = 1 << 2,
-		HIGH_PIORITY_SERIALIZED = 1 << 3
-	};
-
-	enum UnreliableSnapshotBitIndexes : u8 {
-		LOW_PIORITY_SERIALIZED = 1 << 0,
+		HIGH_PIORITY_SERIALIZED = 1 << 3,
+		LOW_PIORITY_SERIALIZED = 1 << 4
 	};
 };
 
@@ -1341,8 +1338,23 @@ public:
 		return unreliableSnapshots;
 	}
 
+	void serializeFullSnapshot(MessageBuffer& buffer) {
+		EntityWorldNetworkManager& world = getEntityWorldNetworkManager();
+		PhysicsWorldNetworkManager& physics = getPhysicsWorldNetworkManager();
+
+		world.yeildAllComponenents();
+		physics.yieldAll();
+
+		Serializer ser = startSerialize(buffer);
+		ser.object(MESSAGE_HEADER_SNAPSHOT_FULL);
+		ser.object(getCurrentStateId());
+		physics.serializePhysicsWorldSnapshot(ser);
+		world.serializeEntityComponentMetaSnapshot(ser, true);
+		world.serializeHighPiorityComponentUpdates(ser);
+	}
+
 	void beginSnapshotCompilation() {
-		tickCount = getCurrentTick();
+		u64 tickCount = getCurrentTick();
 
 		clearSnapshotCompilation();
 
@@ -1372,13 +1384,82 @@ public:
 		return compilationStarted;
 	}
 
-	void beginSnapshot() {
-		tickCount++;
-	}
+	void beginSnapshot() {}
 	
 	void endSnapshot() {
 		serializeReliableSnapshot();
 		serializeUnreliableSnapshot();
+	}
+
+public: // static methods
+	static void deserializeSnapshotCompilationHeader(Deserializer& des, u64& startingTickNum) {
+		des.object(startingTickNum);
+	}
+
+	/* deserializes the header data of a snapshot into the output parameters */
+	static void deserializeSnapshotHeader(Deserializer& des, u8& flags, u32& size) {
+		des.object(flags);
+		des.object(size);
+	}
+
+	static void deserializeSnapshotBuffer(Deserializer& des, u32 snapshotSize, MessageBuffer& buffer) {
+		size_t oldSize = buffer.getSize();
+
+		buffer.addSize(snapshotSize);
+		des.adapter().readBuffer<1, u8>(buffer.getData() + oldSize, (size_t)snapshotSize);
+	}
+
+	static void updateAllWithSnapshotBuffer(u8 flags, const MessageBuffer& buffer) {
+		if (flags == 0) {
+			return;
+		}
+		
+		flecs::world& world = getEntityWorld();
+		EntityWorldNetworkManager& worldManager = getEntityWorldNetworkManager();
+		PhysicsWorldNetworkManager& physicsManager = getPhysicsWorldNetworkManager();
+		Deserializer des = startDeserialize(buffer.getSize(), buffer.getData());
+
+		world.enable_range_check(false);
+
+		if (flags & impl::STATE_SERIALIZED) {
+			u64 stateId;
+			des.object(stateId);
+			transitionState(stateId, true);
+		}
+		if (flags & impl::PHYSICS_SERIALIZED)
+			physicsManager.deserializePhysicsWorldSnapshot(des);
+		if (flags & impl::META_SERIALIZED)
+			worldManager.deserializeEntityComponentMetaSnapshot(des);
+		if (flags & impl::HIGH_PIORITY_SERIALIZED)
+			worldManager.deserializeComponentSnapshot(des);
+		if(flags & impl::LOW_PIORITY_SERIALIZED)
+			worldManager.deserializeComponentSnapshot(des);
+
+		world.enable_range_check(true);
+
+		if (!endDeserialize(des)) {
+			ae::log(ae::ERROR_SEVERITY_WARNING, "Failed to deserialize unreliable snapshot: %i\n", (int)des.adapter().error());
+		}
+	}
+
+	static void deserializeFullSnapshot(Deserializer& des) {
+		EntityWorldNetworkManager& worldManager = getEntityWorldNetworkManager();
+		PhysicsWorldNetworkManager& physicsManager = getPhysicsWorldNetworkManager();
+
+		// must clear all current state! (Only the networked entities of course)
+		flecs::world& world = getEntityWorld();
+		world.remove<NetworkedEntity>();
+		world.delete_with<NetworkedEntity>();
+		world.add<NetworkedEntity>();
+
+		u64 stateId;
+		des.object(stateId);
+		transitionState(stateId, true);
+		getEntityWorld().enable_range_check(false);
+		physicsManager.deserializePhysicsWorldSnapshot(des);
+		worldManager.deserializeEntityComponentMetaSnapshot(des);
+		worldManager.deserializeComponentSnapshot(des);
+		getEntityWorld().enable_range_check(true);
 	}
 
 private:
@@ -1446,7 +1527,6 @@ private:
 	}
 private:
 	bool compilationStarted = false;
-	u32 tickCount = 0;
 
 	// order of members matter here fyi
 	MessageBuffer reliableSnapshots;
@@ -1474,7 +1554,7 @@ public:
 	/* When an entity is by the client, it will start at this range.
 	   I.E. the default client range for created entites. */
 	static constexpr u64 defaultLocalEntityRange = 1000000;
-	static constexpr size_t defaultMaxDsyncBeforeFullSnapshot = 20;
+	static constexpr size_t defaultMaxDsyncBeforeFullSnapshot = 30;
 
 	ClientInterface() {
 		flecs::world& world = getEntityWorld();
@@ -1558,81 +1638,23 @@ protected:
 
 	bool _internalOnMessageRecieved(HSteamNetConnection conn, MessageHeader header, Deserializer& des, u32 size, const void* data) override {
 		flecs::world& world = getEntityWorld();
-		EntityWorldNetworkManager& entity = getEntityWorldNetworkManager();
-		PhysicsWorldNetworkManager& physics = getPhysicsWorldNetworkManager();
 
 		switch (header) {
 		case MESSAGE_HEADER_SNAPSHOT_COMPILATION_RELIABLE: {
-			u32 tickNum;
-			des.object(tickNum);
-
-			while (!des.adapter().isCompletedSuccessfully()) {
-				u8 snapshotFlags;
-				u32 snapshotSize;
-				des.object(snapshotFlags);
-				des.object(snapshotSize);
-
-				u32 currentOffset = des.adapter().currentReadPos();
-
-				snapshotsQueue.push(tickNum);
-				snapshots[tickNum].reliableFlags = snapshotFlags;
-				snapshots[tickNum].reliable.copyData(snapshotSize, (u8*)data + currentOffset);
-				tickNum++;
-
-				des.adapter().currentReadPos(currentOffset + snapshotSize);
-			}
+			deserializeReliableSnapshotCompilation(des, data);
 		} break;
 
 		case MESSAGE_HEADER_SNAPSHOT_COMPILATION_UNRELIABLE: {
-			u32 tickNum;
-			des.object(tickNum);
-
-			while(!des.adapter().isCompletedSuccessfully()) {
-				u8 snapshotFlags;
-				u32 size;
-				des.object(snapshotFlags);
-				des.object(size);
-				// do not add the snapshot if the it is less then the current server tick
-				u32 currentOffset = des.adapter().currentReadPos();
-				if(tickNum < currentServerTick) {
-					tickNum++;
-					des.adapter().currentReadPos(currentOffset + size);
-					continue;
-				}
-
-				snapshots[tickNum].unreliableFlags = snapshotFlags;
-				snapshots[tickNum].unreliable.copyData(size, (u8*)data + currentOffset);
-				tickNum++;
-
-				des.adapter().currentReadPos(currentOffset + size);
-			}
+			deserializeUnreliableSnapshotCompilation(des, data);
 		} break;
 
 		case MESSAGE_HEADER_SNAPSHOT_FULL: {
 			sentFullSnapshotRequest = false;
-			u64 stateId;
-			u32 tickNum;
-
-			flecs::world& world = getEntityWorld();
-			world.remove<NetworkedEntity>();
-			world.delete_with<NetworkedEntity>();
-			world.add<NetworkedEntity>();
-
-			while(!snapshotsQueue.empty())
+			while (!snapshotsQueue.empty())
 				snapshotsQueue.pop();
-
 			snapshots.clear();
 
-			des.object(stateId);
-			des.object(tickNum);
-
-			transitionState(stateId, true);
-
-			getEntityWorld().enable_range_check(false);
-			physics.deserializePhysicsWorldSnapshot(des);
-			entity.deserializeEntityComponentMetaSnapshot(des);
-			entity.deserializeComponentSnapshot(des);
-			getEntityWorld().enable_range_check(true);
+			NetworkSnapshotManager::deserializeFullSnapshot(des);
 		} break;
 
 		snapshotArrivedLate:
@@ -1644,8 +1666,6 @@ protected:
 	}
 
 	void beginTick() override {
-		getEntityWorld().enable_range_check(false);
-
 		if(snapshots.size() > defaultMaxDsyncBeforeFullSnapshot && !sentFullSnapshotRequest) {
 			log(ERROR_SEVERITY_WARNING, "Possible dysnc, requesting full snapshot\n");
 			// We add a warning to the connection because if the D-sync is too large
@@ -1664,64 +1684,61 @@ protected:
 
 		if(!snapshotsQueue.empty()) {
 			currentServerTick = snapshotsQueue.front();
+
 			Snapshot& snapshot = snapshots[currentServerTick];
-			EntityWorldNetworkManager& worldManager = getEntityWorldNetworkManager();
-			PhysicsWorldNetworkManager& physicsManager = getPhysicsWorldNetworkManager();
-
-			// The reliable snapshot must be deserialized first
-			{
-				u8 flags = snapshot.reliableFlags;
-				Deserializer des = startDeserialize(snapshot.reliable.getSize(), snapshot.reliable.getData());
-				if(flags & impl::STATE_SERIALIZED) {
-					u64 stateId;
-					des.object(stateId);
-					transitionState(stateId, true);
-				}
-				if (flags & impl::PHYSICS_SERIALIZED)
-					physicsManager.deserializePhysicsWorldSnapshot(des);
-				if (flags & impl::META_SERIALIZED)
-					worldManager.deserializeEntityComponentMetaSnapshot(des);
-				if (flags & impl::HIGH_PIORITY_SERIALIZED)
-					worldManager.deserializeComponentSnapshot(des);
-
-				if(!endDeserialize(des)) {
-					ae::log(ae::ERROR_SEVERITY_WARNING, "Failed to deserialize reliable snapshot: %i\n", (int)des.adapter().error());
-
-				}
-			}
-
-			if(snapshot.unreliable.getData() != nullptr) {
-				u8 flags = snapshot.unreliableFlags;
-				Deserializer des = startDeserialize(snapshot.unreliable.getSize(), snapshot.unreliable.getData());
-
-				if(flags != 0) {
-					worldManager.deserializeComponentSnapshot(des);
-				}
-
-				if (!endDeserialize(des)) {
-					ae::log(ae::ERROR_SEVERITY_WARNING, "Failed to deserialize unreliable snapshot: %i\n", (int)des.adapter().error());
-
-				}
-			}
+			NetworkSnapshotManager::updateAllWithSnapshotBuffer(snapshot.flags, snapshot.buffer);
 
 			snapshotsQueue.pop();
 			snapshots.erase(currentServerTick);
 		}
-
-		getEntityWorld().enable_range_check(true);
 	}
 
 	void endTick() override {
 	
 	}
 
+private:
+	void deserializeReliableSnapshotCompilation(Deserializer& des, const void* data) {
+		u64 tickNum;
+		NetworkSnapshotManager::deserializeSnapshotCompilationHeader(des, tickNum);
+
+		for (; !des.adapter().isCompletedSuccessfully(); tickNum++) {
+			u8 snapshotFlags;
+			u32 snapshotSize = 0;
+			NetworkSnapshotManager::deserializeSnapshotHeader(des, snapshotFlags, snapshotSize);
+
+			snapshotsQueue.push(tickNum);
+			NetworkSnapshotManager::deserializeSnapshotBuffer(des, snapshotSize, snapshots[tickNum].buffer);
+			snapshots[tickNum].flags |= snapshotFlags;
+		}
+	}
+
+	void deserializeUnreliableSnapshotCompilation(Deserializer& des, const void* data) {
+		u64 tickNum;
+		NetworkSnapshotManager::deserializeSnapshotCompilationHeader(des, tickNum);
+
+		for(; !des.adapter().isCompletedSuccessfully(); tickNum++) {
+			u8 snapshotFlags;
+			u32 snapshotSize = 0;
+			NetworkSnapshotManager::deserializeSnapshotHeader(des, snapshotFlags, snapshotSize);
+
+			// do not add the snapshot if the it is less then the current server tick.
+			// This means that the unreliable snapshot arrived too late and the 
+			// tick was already executed!
+			if(tickNum < currentServerTick || snapshots.find(tickNum) == snapshots.end()) {
+				des.adapter().currentReadPos(des.adapter().currentReadPos() + snapshotSize);
+				continue;
+			}
+
+			NetworkSnapshotManager::deserializeSnapshotBuffer(des, snapshotSize, snapshots[tickNum].buffer);
+			snapshots[tickNum].flags |= snapshotFlags;
+		}
+	}
+
 protected:
 	struct Snapshot {
-		u8 reliableFlags;
-		MessageBuffer reliable;
-
-		u8 unreliableFlags;
-		MessageBuffer unreliable;
+		u8 flags = 0;
+		MessageBuffer buffer;
 	};
 
 	std::map<u32, Snapshot> snapshots;
@@ -1785,21 +1802,10 @@ public:
 	 * @param who the client/connection to send the update to
 	 */
 	void fullSyncUpdate(HSteamNetConnection who) {
-		EntityWorldNetworkManager& world = getEntityWorldNetworkManager();
-		PhysicsWorldNetworkManager& physics = getPhysicsWorldNetworkManager();
-
-		world.yeildAllComponenents();
-		physics.yieldAll();
+		NetworkSnapshotManager& networkSnapshotManager = getNetworkSnapshotManager();
 
 		MessageBuffer buffer;
-		Serializer ser = startSerialize(buffer);
-		ser.object(MESSAGE_HEADER_SNAPSHOT_FULL);
-		ser.object((u64)getCurrentStateId());
-		ser.object((u32)getCurrentTick());
-		physics.serializePhysicsWorldSnapshot(ser);
-		world.serializeEntityComponentMetaSnapshot(ser, true);
-		world.serializeHighPiorityComponentUpdates(ser);
-		endSerialize(ser, buffer);
+		networkSnapshotManager.serializeFullSnapshot(buffer);
 
 		getNetworkManager().sendMessage(who, std::move(buffer), false, true);
 	}
