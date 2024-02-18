@@ -464,7 +464,7 @@ public:
 
 						meta->messagesFreed++;
 						if(meta->messagesFreed == meta->messagesSent) {
-							delete[] message->m_pData;
+							delete[] (u8*)message->m_pData;
 							delete meta;						
 						}
 					};
@@ -478,7 +478,7 @@ public:
 			std::vector<int64_t> results;
 			results.resize(networkingMessages.size());
 
-			impl::getSockets()->SendMessages((int)networkingMessages.size(), networkingMessages.data(), results.data());
+			impl::getSockets()->SendMessages((int)networkingMessages.size(), networkingMessages.data(), (int64*)results.data());
 			networkingMessages.clear();
 		
 			for(int64_t messageResult : results) {
@@ -1009,14 +1009,14 @@ public:
 		componentId.is_a<NetworkedComponent>();
 
 		allEntityManagement.push_back(
-			world.observer<T>()
-			.event(flecs::OnAdd).each([rawId, this](flecs::entity e, T&) {
+			world.observer().term<T>
+			.event(flecs::OnAdd).each([rawId, this](flecs::entity e) {
 				componentsCreated[impl::cf(e)].insert(rawId);
 			}));
 
 		allEntityManagement.push_back(
-			world.observer<T>()
-			.event(flecs::OnRemove).each([rawId, this](flecs::entity e, T&){
+			world.observer().term<T>
+			.event(flecs::OnRemove).each([rawId, this](flecs::entity e){
 				componentsDestroyed[impl::cf(e)].insert(rawId);
 			}));
 
@@ -1051,9 +1051,9 @@ protected:
 		flecs::world& world = getEntityWorld();
 		
 		forceComponentChangeSystem.push_back(
-			 world.system<T>()
-			.kind<NoPhase>()
-			.each([rawId, this](flecs::entity e, T& comp) {
+			 world.system().term<T>()
+			.template kind<NoPhase>()
+			.each([rawId, this](flecs::entity e) {
 				componentsCreated[impl::cf(e)].insert(rawId);
 			}));
 	}
@@ -1101,7 +1101,7 @@ protected:
 
 		forceComponentChangeSystem.push_back(
 			world.system<T>()
-			.kind<NoPhase>()
+			.template kind<NoPhase>()
 			.each([rawId, this](flecs::entity e, T& comp) {
 				highPiorityComponentsUpdates[impl::cf(e)].insert(rawId);
 			}));

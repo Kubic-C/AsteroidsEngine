@@ -10,6 +10,8 @@ add_library(AsteroidsEngine STATIC
 	"entry.hpp" "entry.cpp"
 	"asteroids.hpp")
 	 
+set_target_properties(AsteroidsEngine PROPERTIES COMPILE_FLAGS "-w")
+
 target_include_directories(AsteroidsEngine PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/..")
 target_link_libraries(AsteroidsEngine PUBLIC 	
 	bitsery 

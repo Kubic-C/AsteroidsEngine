@@ -524,7 +524,7 @@ public:
 		u32 startIndex = (u32)list.size();
 		list.resize(range);
 		for (u32 i = startIndex; i < list.size(); i++) {
-			list[i].emplace<FreeIndex>(i + 1, i - 1);
+			list[i].template emplace<FreeIndex>(i + 1, i - 1);
 		}
 
 		FreeIndex& firstNewIndex = std::get<FreeIndex>(list[startIndex]);
@@ -550,11 +550,11 @@ public:
 
 			assert(std::get<FreeIndex>(element).prev == invalidId);
 
-			element.emplace<T>(std::forward<params>(args)...);
+			element.template emplace<T>(std::forward<params>(args)...);
 			return elementIndex;
 		}
 		else {
-			list.emplace_back().emplace<T>(std::forward<params>(args)...);
+			list.emplace_back().template emplace<T>(std::forward<params>(args)...);
 			return (u32)list.size() - 1;
 		}
 	}
@@ -570,7 +570,7 @@ public:
 		if (inUse(index))
 			return invalidId;
 
-		list[index].emplace<T>(std::forward<params>(args)...);
+		list[index].template emplace<T>(std::forward<params>(args)...);
 
 		return index;
 	}
@@ -661,7 +661,7 @@ public:
 	template<typename Shape, typename ... params>
 	u32 createShape(params&& ... args) {
 		u32 newId = shapes.push();
-		shapes[newId].emplace<Shape>(std::forward<params>(args)...);
+		shapes[newId].template emplace<Shape>(std::forward<params>(args)...);
 		return newId;
 	}
 
@@ -669,7 +669,7 @@ public:
 	u32 insertShape(u32 id, params&& ... args) {
 		u32 newId = shapes.insert(id);
 		if (newId != shapes.invalidId)
-			shapes[newId].emplace<Shape>(std::forward<params>(args)...);
+			shapes[newId].template emplace<Shape>(std::forward<params>(args)...);
 		return newId;
 	}
 
