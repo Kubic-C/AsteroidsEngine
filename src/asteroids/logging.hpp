@@ -5,7 +5,9 @@
 AE_NAMESPACE_BEGIN
 
 namespace impl {
-	inline std::string& trim(std::string& str) {
+	inline std::string trim(const std::string& str_) {
+		std::string str = str_;
+
 		str.erase(str.begin(), std::find_if(str.begin(), str.end(), [](char x){return !std::isspace(x);}));
 		str.erase(std::find_if(str.rbegin(), str.rend(), []( char ch) {
 			return !std::isspace(ch);
