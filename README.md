@@ -26,5 +26,3 @@ There are many libraries that the asteroids engine uses:
   * SFML: Audio, Window, Rendering handling
   * TGUI: GUI handling
   * THST: Spatial partitioning library
-
-GameNetworkingSockets requires some extra initialization with vcpkg.
