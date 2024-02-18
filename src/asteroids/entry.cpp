@@ -1,4 +1,5 @@
 #include "entry.hpp"
+#include <stacktrace>
 
 #undef main
 
@@ -17,11 +18,7 @@ int main(int argc, char* argv[]) {
 		(void)error;
 		ae::log(ae::ERROR_SEVERITY_WARNING, "Engine Error Occurred; Terminating");
 		returnCode = -1;
-	} // Use to catch these but it made debugging hard; can't locate the source of the error 
-	catch (std::exception& error) {
-		ae::log(ae::ERROR_SEVERITY_WARNING, "<red, bold>std::exception<reset>::what(): %s\n", error.what());
-		returnCode = -1;
-	}
+	} 
 
 	return returnCode;
 }

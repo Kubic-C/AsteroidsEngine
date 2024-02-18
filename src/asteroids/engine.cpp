@@ -11,6 +11,8 @@ struct StateInfo {
 struct Engine {
 	// ORDERED BY INITIALIZATION, DO NOT CHANGE THE ORDER- thank you
 
+	std::shared_ptr<PhysicsWorld> physicsWorld;
+	std::shared_ptr<PhysicsWorldNetworkManager> physicsWorldNetwork;
 	flecs::world entityWorld;
 	ISteamNetworkingSockets* sockets;
 	ISteamNetworkingUtils* util;
@@ -20,8 +22,6 @@ struct Engine {
 	std::function<void()> updateCallback;
 	std::shared_ptr<sf::RenderWindow> window;
 	std::shared_ptr<tgui::Gui> gui;
-	std::shared_ptr<PhysicsWorld> physicsWorld;
-	std::shared_ptr<PhysicsWorldNetworkManager> physicsWorldNetwork;
 	std::shared_ptr<NetworkSnapshotManager> networkSnaphots;
 	std::unordered_map<u64, StateInfo> states;
 	u64 activeState;

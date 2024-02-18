@@ -509,111 +509,6 @@ inline bool testCollision(Polygon& Polygon, Circle& Circle, CollisionManifold& m
 	return false;
 }
 
-template<typename T>
-class FreeList {
-public:
-	static constexpr u32 invalidId = std::numeric_limits<u32>::max();
-
-	FreeList() {
-		nextFreeId = invalidId;
-		list = {};
-	}
-
-	void setMaxRange(size_t range) {
-		if (range <= list.size())
-			throw std::runtime_error("Attempt to set max range beneath current max range.");
-
-		u32 startIndex = (u32)list.size();
-		list.resize(range);
-		for (u32 i = startIndex; i < list.size(); i++) {
-			list[i].template emplace<FreeIndex>(i + 1, i - 1);
-		}
-
-		FreeIndex& firstNewIndex = std::get<FreeIndex>(list[startIndex]);
-		FreeIndex& lastNewIndex = std::get<FreeIndex>(list.back());
-
-		lastNewIndex.next = nextFreeId;
-		firstNewIndex.prev = invalidId;
-		nextFreeId = startIndex;
-	}
-
-	template<typename ... params>
-	u32 push(params&& ... args) {
-		if (nextFreeId != invalidId) {
-			assert(list[nextFreeId].index() == freeIndex);
-
-			u32 elementIndex = nextFreeId;
-			std::variant<FreeIndex, T>& element = list[nextFreeId];
-			nextFreeId = std::get<FreeIndex>(element).next;
-
-			if (nextFreeId != invalidId) {
-				std::get<FreeIndex>(list[nextFreeId]).prev = invalidId;
-			}
-
-			assert(std::get<FreeIndex>(element).prev == invalidId);
-
-			element.template emplace<T>(std::forward<params>(args)...);
-			return elementIndex;
-		}
-		else {
-			list.emplace_back().template emplace<T>(std::forward<params>(args)...);
-			return (u32)list.size() - 1;
-		}
-	}
-
-	// returns index element was inserted at, invalidId otherwise
-	template<typename ... params>
-	u32 insert(u32 index, params&& ... args) {
-		if (index >= list.size()) {
-			setMaxRange(index + 1);
-			return insert(index);
-		}
-
-		if (inUse(index))
-			return invalidId;
-
-		list[index].template emplace<T>(std::forward<params>(args)...);
-
-		return index;
-	}
-
-	void erase(u32 index) {
-		assert(list[index].index() == objectIndex);
-
-		if (nextFreeId != invalidId)
-			std::get<FreeIndex>(list[nextFreeId]).prev = index;
-		list[index] = FreeIndex(nextFreeId, invalidId);
-		nextFreeId = index;
-	}
-
-	bool inUse(u32 index) {
-		return index < list.size() && list[index].index() == objectIndex;
-	}
-
-	T& operator[](u32 index) {
-		assert(list[index].index() == objectIndex);
-		return std::get<T>(list[index]);
-	}
-
-protected:
-	enum {
-		freeIndex = 0,
-		objectIndex = 1
-	};
-
-	struct FreeIndex {
-		FreeIndex() : next(invalidId), prev(invalidId) {}
-		FreeIndex(u32 next, u32 prev) : next(next), prev(prev) {}
-
-		u32 next;
-		u32 prev;
-	};
-
-private:
-	u32 nextFreeId;
-	std::vector<std::variant<FreeIndex, T>> list;
-};
-
 struct SpatialIndexElement : AABB {
 	u32 shapeId;
 	u32 entityId;
@@ -635,18 +530,20 @@ extern PhysicsWorld& getPhysicsWorld();
 
 class PhysicsWorld {
 public:
-	static constexpr u32 invalidId = FreeList<int>::invalidId;
+	static constexpr u32 invalidId = std::numeric_limits<u32>::max();
 
 	bool doesShapeExist(u32 id) {
-		return shapes.inUse(id);
+		return shapes.find(id) != shapes.end();
 	}
 
 	Circle& getCircle(u32 circleId) {
+		assert(doesShapeExist(circleId));
 		assert(shapes[circleId].index() == circleIndex);
 		return std::get<Circle>(shapes[circleId]);
 	}
 
 	Polygon& getPolygon(u32 polygonId) {
+		assert(doesShapeExist(polygonId));
 		assert(shapes[polygonId].index() == polygonIndex);
 		return std::get<Polygon>(shapes[polygonId]);
 	}
@@ -662,20 +559,23 @@ public:
 
 	template<typename Shape, typename ... params>
 	u32 createShape(params&& ... args) {
-		u32 newId = shapes.push();
+		u32 newId = ++idCounter;
 		shapes[newId].template emplace<Shape>(std::forward<params>(args)...);
 		return newId;
 	}
 
 	template<typename Shape, typename ... params>
 	u32 insertShape(u32 id, params&& ... args) {
-		u32 newId = shapes.insert(id);
-		if (newId != shapes.invalidId)
-			shapes[newId].template emplace<Shape>(std::forward<params>(args)...);
-		return newId;
+		assert(!doesShapeExist(id));
+
+		shapes[id].template emplace<Shape>(std::forward<params>(args)...);
+
+		return id;
 	}
 
 	void eraseShape(u32 id) {
+		assert(doesShapeExist(id));
+
 		SpatialIndexElement element;
 		element.shapeId = id;
 		AABB aabb = getShape(id).getAABB();
@@ -714,7 +614,8 @@ private:
 
 private:
 	SpatialIndexTree rtree;
-	FreeList<std::variant<Circle, Polygon>> shapes;
+	std::unordered_map<u32, std::variant<Circle, Polygon>> shapes;
+	u32 idCounter = 0;
 };
 
 AE_NAMESPACE_END
