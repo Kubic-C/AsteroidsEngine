@@ -12,10 +12,6 @@ Features:
 
 The engine is named after where it originated from, the game Asteroids. 
 _**Documentation is a work in progress,**_ but most of the code is self-explanatory.
-
-The engine cannot currently be built with, or may be hard to build with MinGW compilers.
-The reason is GameNetworkingSockets, there is some trouble compiling with the libraries
-that GameNetworkingSockets needs.
   
 ## Libraries
 
@@ -26,5 +22,3 @@ There are many libraries that the asteroids engine uses:
   * SFML: Audio, Window, Rendering handling
   * TGUI: GUI handling
   * THST: Spatial partitioning library
-
-GameNetworkingSockets requires some extra initialization with vcpkg.
