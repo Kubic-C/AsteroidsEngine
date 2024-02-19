@@ -18,7 +18,7 @@ namespace bitsery {
 	void serialize(S& s, u16& o) {
 		s.value2b(o);
 	}
-
+	
 	template<typename S>
 	void serialize(S& s, u8& o) {
 		s.value1b(o);
@@ -383,6 +383,8 @@ public:
 			steamMessageFlags = k_nSteamNetworkingSend_Unreliable;
 		}
 
+		stats.writtenBytes += messageBuffer.getSize();
+
 		EResult result = k_EResultOK;
 		if(sendAll) {
 
@@ -468,6 +470,8 @@ public:
 			Deserializer des = startDeserialize(message->GetSize(), message->GetData());
 			MessageHeader header = MESSAGE_HEADER_INVALID;
 
+			stats.readBytes += (size_t)message->GetSize();
+
 			des.object(header);
 			if(networkInterface->_internalOnMessageRecieved(message->m_conn, header, des))
 				networkInterface->onMessageRecieved(message->m_conn, header, des);
@@ -524,6 +528,26 @@ public:
 			log(ERROR_SEVERITY_WARNING, "Connection <red>exceeded maxWarnings<reset> and was forcibily disconnected\n");
 		}
 	}
+
+	NODISCARD size_t getWrittenByteCount() const {
+		return stats.writtenBytes;
+	}
+
+	NODISCARD size_t getReadByteCount() const {
+		return stats.readBytes;
+	}
+
+	/* resets read byte count and written byte count to zero. */
+	void clearStats() {
+		stats.readBytes = 0;
+		stats.writtenBytes = 0;
+	}
+
+protected:
+	struct Stats {
+		size_t writtenBytes = 0;
+		size_t readBytes = 0;
+	} stats;
 
 protected:
 	static void handleConnectionChange(SteamNetConnectionStatusChangedCallback_t* info) {
@@ -612,9 +636,14 @@ struct NoPhase {};
 extern u64 getCurrentTick();
 
 class EntityWorldNetworkManager {
-	static bool isIdValid(u32 id) {
+	template<typename Integer>
+	static bool isIdValid(Integer id) {
 		return impl::af(id) != 0;
 	}
+
+	using SerCompIdType   = u32;
+	using SerEntityIdType = u32;
+	using SerSizeType     = u32;
 
 public:
 	EntityWorldNetworkManager() {
@@ -705,26 +734,26 @@ public:
 			cache.archetypeComponent[cache.idList].push_back(pair.first);
 		}
 
-		ser.object((u32)cache.archetypeComponent.size());
-		for (std::pair<const std::vector<u32>, std::vector<u32>>& pair : cache.archetypeComponent) {
+		ser.object((SerSizeType)cache.archetypeComponent.size());
+		for (auto& pair : cache.archetypeComponent) {
 			// Serialize the order of components
-			const std::vector<u32>& componentTypes = pair.first;
-			ser.object((u32)componentTypes.size()); // entity component type count
-			for (u32 compType : componentTypes) { // entity component types
+			const auto& componentTypes = pair.first;
+			ser.object((SerSizeType)componentTypes.size()); // entity component type count
+			for (SerCompIdType compType : componentTypes) { // entity component types
 				ser.object(compType);
 			}
 
 			// Then serialize all entity-components
-			ser.object((u32)pair.second.size());
-			for (u32 entityId : pair.second) {
+			ser.object((SerSizeType)pair.second.size());
+			for (SerEntityIdType entityId : pair.second) {
 				ser.object(entityId);
 			}
 		}
 
 		// Destroyed Components and Destroyed entites have to be skipped in full snapshots
 		if(noDestroyed) {
-			ser.object((u32)0);
-			ser.object((u32)0);
+			ser.object((SerSizeType)0);
+			ser.object((SerSizeType)0);
 			goto disabledOrEnabled;
 		}
 		
@@ -739,26 +768,26 @@ public:
 			cache.archetypeComponent[cache.idList].push_back(pair.first);
 		}
 
-		ser.object((u32)cache.archetypeComponent.size());
-		for (std::pair<const std::vector<u32>, std::vector<u32>>& pair : cache.archetypeComponent) {
+		ser.object((SerSizeType)cache.archetypeComponent.size());
+		for (auto& pair : cache.archetypeComponent) {
 			// Serialize the order of components
-			const std::vector<u32>& componentTypes = pair.first;
-			ser.object((u32)componentTypes.size()); // entity component type count
-			for (u32 compType : componentTypes) { // entity component types
+			const auto& componentTypes = pair.first;
+			ser.object((SerSizeType)componentTypes.size()); // entity component type count
+			for (SerCompIdType compType : componentTypes) { // entity component types
 				ser.object(compType);
 			}
 
 			// Then serialize all entity-components
-			ser.object((u32)pair.second.size());
-			for (u32 entityId : pair.second) {
+			ser.object((SerSizeType)pair.second.size());
+			for (SerEntityIdType entityId : pair.second) {
 				ser.object(entityId);
 			}
 		}
 
 		// Destroyed entities
 
-		ser.object((u32)entitiesDestroyed.size());
-		for(u32 id : entitiesDestroyed) {
+		ser.object((SerSizeType)entitiesDestroyed.size());
+		for(SerEntityIdType id : entitiesDestroyed) {
 			ser.object(id);
 		}
 
@@ -766,22 +795,24 @@ public:
 
 		// Enabled entities
 
-		ser.object((u32)entitiesEnabled.size());
-		for (u32 id : entitiesEnabled) {
+		ser.object((SerSizeType)entitiesEnabled.size());
+		for (SerEntityIdType id : entitiesEnabled) {
 			ser.object(id);
 		}
 
 		// Disabled entities
 
-		ser.object((u32)entitiesDisabled.size());
-		for (u32 id : entitiesDisabled) {
+		ser.object((SerSizeType)entitiesDisabled.size());
+		for (SerEntityIdType id : entitiesDisabled) {
 			ser.object(id);
 		}
 
 		// very important to make sure we don't forget to clear these!
 		componentsCreated.clear();
-		componentsDestroyed.clear();
-		entitiesDestroyed.clear();
+		if(!noDestroyed) {
+			componentsDestroyed.clear();
+			entitiesDestroyed.clear();
+		}
 		entitiesEnabled.clear();
 		entitiesDisabled.clear();
 	}
@@ -792,27 +823,27 @@ public:
 		if (world.is_deferred())
 			log(ERROR_SEVERITY_FATAL, "World must not be in deferred mode when calling deserializeComponentSnapshot");
 
-		u32 archetypeCount;
+		SerSizeType archetypeCount;
 		des.object(archetypeCount);
-		for(u32 i = 0; i < archetypeCount; i++) {
+		for(SerSizeType i = 0; i < archetypeCount; i++) {
 			// Getting id list of components
 			cache.idList.clear();
-			u32 idListSize;
+			SerSizeType idListSize;
 			des.object(idListSize);
 			cache.idList.resize(idListSize);
-			for (u32 compI = 0; compI < idListSize; compI++) { // entity component types
-				des.object(cache.idList[compI]);
+			for (SerSizeType compI = 0; compI < idListSize; compI++) { // entity component types
+				des.object((SerCompIdType)cache.idList[compI]);
 			}
 
 			// Now deserializing all the entity-component data
-			u32 entityCount;
+			SerSizeType entityCount;
 			des.object(entityCount);
-			for(u32 entityI = 0; entityI < entityCount; entityI++) {
-				u32 serId;
+			for(SerSizeType entityI = 0; entityI < entityCount; entityI++) {
+				SerEntityIdType serId;
 				des.object(serId);
-				flecs::entity e = world.ensure(serId); 
+				flecs::entity e = world.ensure((u64)serId); 
 
-				for(u32 compId : cache.idList) {
+				for(SerCompIdType compId : cache.idList) {
 					deserializeRecords[compId](des, e.get_mut(impl::af(compId)));
 				}
 			} 
@@ -827,27 +858,27 @@ public:
 
 		// Created Components
 
-		u32 archetypeCount = 0;
+		SerSizeType archetypeCount = 0;
 		des.object(archetypeCount);
-		for (u32 i = 0; i < archetypeCount; i++) {
+		for (SerSizeType i = 0; i < archetypeCount; i++) {
 			// Deserialize the order of components
 			cache.idList.clear();
-			u32 idListSize;
+			SerSizeType idListSize;
 			des.object(idListSize);
 			cache.idList.resize(idListSize);
-			for (u32 compI = 0; compI < idListSize; compI++) { // entity component types
-				des.object(cache.idList[compI]);
+			for (SerSizeType compI = 0; compI < idListSize; compI++) { // entity component types
+				des.object((SerCompIdType)cache.idList[compI]);
 			}
 
 			// Then deserialize all entity-components
-			u32 entityCount;
+			SerSizeType entityCount;
 			des.object(entityCount);
-			for (u32 entityI = 0; entityI < entityCount; entityI++) {
-				u32 serId;
+			for (SerSizeType entityI = 0; entityI < entityCount; entityI++) {
+				SerEntityIdType serId;
 				des.object(serId);
 				flecs::entity e = world.ensure(serId);
 
-				for (u32 compId : cache.idList) {
+				for (SerCompIdType compId : cache.idList) {
 					e.add(impl::af(compId));
 				}
 			}
@@ -859,22 +890,22 @@ public:
 		for (u32 i = 0; i < archetypeCount; i++) {
 			// Deserialize the order of components
 			cache.idList.clear();
-			u32 idListSize;
+			SerSizeType idListSize;
 			des.object(idListSize);
 			cache.idList.resize(idListSize);
-			for (u32 compI = 0; compI < idListSize; compI++) { // entity component types
-				des.object(cache.idList[compI]);
+			for (SerSizeType compI = 0; compI < idListSize; compI++) { // entity component types
+				des.object((SerCompIdType)cache.idList[compI]);
 			}
 
 			// Then deserialize all entity-components
-			u32 entityCount;
+			SerSizeType entityCount;
 			des.object(entityCount);
-			for (u32 entityI = 0; entityI < entityCount; entityI++) {
-				u32 serId;
+			for (SerSizeType entityI = 0; entityI < entityCount; entityI++) {
+				SerEntityIdType serId;
 				des.object(serId);
 				flecs::entity e = world.ensure(serId);
 
-				for(u32 compId : cache.idList) {
+				for(SerCompIdType compId : cache.idList) {
 					e.remove(impl::af(compId));
 				}
 			}
@@ -882,14 +913,13 @@ public:
 
 		// Destroyed entities
 
-		u32 entityCount;
+		SerSizeType entityCount;
 		des.object(entityCount);
-		for (u32 i = 0; i < entityCount; i++) {
-			u32 serId;
+		for (SerSizeType i = 0; i < entityCount; i++) {
+			SerEntityIdType serId;
 			des.object(serId);
 
 			if(!isIdValid(serId)) {
-				log(ERROR_SEVERITY_WARNING, "Possible dsync: recieved destroyEntities contained entity that ws not alive: %u\n", serId);
 				continue;
 			}
 	
@@ -899,8 +929,8 @@ public:
 		// Enabled entities
 
 		des.object(entityCount);
-		for (u32 i = 0; i < entityCount; i++) {
-			u32 serId;
+		for (SerSizeType i = 0; i < entityCount; i++) {
+			SerEntityIdType serId;
 			des.object(serId);
 
 			if (!isIdValid(serId)) {
@@ -914,8 +944,8 @@ public:
 		// Disabled entities
 
 		des.object(entityCount);
-		for (u32 i = 0; i < entityCount; i++) {
-			u32 serId;
+		for (SerSizeType i = 0; i < entityCount; i++) {
+			SerEntityIdType serId;
 			des.object(serId);
 
 			if (!isIdValid(serId)) {
@@ -1046,15 +1076,11 @@ protected:
 			}));
 	}
 
-	void serializeComponentSnapshot(std::unordered_map<u32, std::unordered_set<u32>>& componentsChanged, Serializer& ser) {
+	void serializeComponentSnapshot(std::unordered_map<SerEntityIdType, std::unordered_set<SerCompIdType>>& componentsChanged, Serializer& ser) {
 		flecs::world& world = getEntityWorld();
 
 		if (world.is_deferred())
 			log(ERROR_SEVERITY_FATAL, "World must not be in deferred mode when calling serializeComponentSnapshot");
-
-		// Note:
-		// Component updates are in a seperate function because they make the size of messages incredibily large
-		// so to avoid lag we seperate EntityComponentMeta updates and ComponentChanged updates.
 
 		// Must serialize: 
 		//	- Components changed
@@ -1071,21 +1097,21 @@ protected:
 			cache.archetypeComponent[cache.idList].push_back(pair.first);
 		}
 
-		ser.object((u32)cache.archetypeComponent.size());
-		for (std::pair<const std::vector<u32>, std::vector<u32>>& pair : cache.archetypeComponent) {
+		ser.object((SerSizeType)cache.archetypeComponent.size());
+		for (auto& pair : cache.archetypeComponent) {
 			// Serialize the order of components
-			const std::vector<u32>& componentTypes = pair.first;
-			ser.object((u32)componentTypes.size()); // entity component type count
-			for (u32 compType : componentTypes) { // entity component types
+			const auto& componentTypes = pair.first;
+			ser.object((SerSizeType)componentTypes.size()); // entity component type count
+			for (SerCompIdType compType : componentTypes) { // entity component types
 				ser.object(compType);
 			}
 
 			// Then serialize all entity-components
-			ser.object((u32)pair.second.size());
-			for (u32 entityId : pair.second) {
+			ser.object((SerSizeType)pair.second.size());
+			for (SerEntityIdType entityId : pair.second) {
 				ser.object(entityId);
 
-				for (u32 compId : pair.first) {
+				for (SerCompIdType compId : pair.first) {
 					flecs::entity entity = impl::af(entityId);
 					flecs::entity component = impl::af(compId);
 
@@ -1108,24 +1134,24 @@ protected:
 			}
 		}
 
-		std::vector<u32> idList;
-		std::map<std::vector<u32>, std::vector<u32>> archetypeComponent;
+		std::vector<SerCompIdType> idList;
+		std::map<std::vector<SerCompIdType>, std::vector<SerEntityIdType>> archetypeComponent;
 	} cache;
 
 	std::vector<flecs::entity> allEntityManagement;
 	std::vector<flecs::system> forceComponentChangeSystem;
 
-	std::unordered_map<u32, std::function<void(Serializer& ser, void* data)>> serializeRecords;
-	std::unordered_map<u32, std::function<void(Deserializer& ser, void* data)>> deserializeRecords;
+	std::unordered_map<SerCompIdType, std::function<void(Serializer& ser, void* data)>> serializeRecords;
+	std::unordered_map<SerCompIdType, std::function<void(Deserializer& ser, void* data)>> deserializeRecords;
 
-	std::unordered_map<u32, std::unordered_set<u32>> highPiorityComponentsUpdates;
-	std::unordered_map<u32, std::unordered_set<u32>> lowPiorityComponentsUpdates;
+	std::unordered_map<SerEntityIdType, std::unordered_set<SerCompIdType>> highPiorityComponentsUpdates;
+	std::unordered_map<SerEntityIdType, std::unordered_set<SerCompIdType>> lowPiorityComponentsUpdates;
 
-	std::unordered_map<u32, std::set<u32>> componentsCreated;
-	std::unordered_map<u32, std::set<u32>> componentsDestroyed;
-	std::unordered_set<u32> entitiesDestroyed;
-	std::vector<u32> entitiesEnabled;
-	std::vector<u32> entitiesDisabled;
+	std::unordered_map<SerEntityIdType, std::set<SerCompIdType>> componentsCreated;
+	std::unordered_map<SerEntityIdType, std::set<SerCompIdType>> componentsDestroyed;
+	std::unordered_set<SerEntityIdType> entitiesDestroyed;
+	std::vector<SerEntityIdType> entitiesEnabled;
+	std::vector<SerEntityIdType> entitiesDisabled;
 };
 
 /* Physics Syncing */
@@ -1288,7 +1314,7 @@ public:
 		ser.object(MESSAGE_HEADER_SNAPSHOT_FULL);
 		ser.object(getCurrentStateId());
 		physics.serializePhysicsWorldSnapshot(ser);
-		world.serializeEntityComponentMetaSnapshot(ser, true);
+		world.serializeEntityComponentMetaSnapshot(ser);
 		world.serializeHighPiorityComponentUpdates(ser);
         endSerialize(ser, buffer);
 	}
@@ -1324,9 +1350,7 @@ public:
 		return compilationStarted;
 	}
 
-	void beginSnapshot() {}
-	
-	void endSnapshot() {
+	void updateNetworkChanges() {
 		serializeReliableSnapshot();
 		serializeUnreliableSnapshot();
 	}
@@ -1619,7 +1643,7 @@ protected:
 			sentFullSnapshotRequest = true;
 		}
 
-		if(!snapshotsQueue.empty()) {
+		while(snapshotsQueue.size() > 1 && !sentFullSnapshotRequest) {
 			currentServerTick = snapshotsQueue.front();
 
 			Snapshot& snapshot = snapshots[currentServerTick];
@@ -1671,6 +1695,7 @@ private:
 			snapshots[tickNum].flags |= snapshotFlags;
 		}
 	}
+
 
 protected:
 	struct Snapshot {
@@ -1746,7 +1771,10 @@ public:
 		MessageBuffer buffer;
 		networkSnapshotManager.serializeFullSnapshot(buffer);
 
-		getNetworkManager().sendMessage(who, std::move(buffer), false, true);
+		if(who)
+			getNetworkManager().sendMessage(who, std::move(buffer), false, true);
+		else
+			getNetworkManager().sendMessage(who, std::move(buffer), true, true);
 	}
 
 	/**
@@ -1782,11 +1810,10 @@ public:
 	}
 protected:
 	void beginTick() override {
-		getNetworkSnapshotManager().beginSnapshot();
 	}
 
 	void endTick() override {
-		getNetworkSnapshotManager().endSnapshot();
+		getNetworkSnapshotManager().updateNetworkChanges();
 	}
 
 	bool open(const SteamNetworkingIPAddr& addr, const SteamNetworkingConfigValue_t& opt) override {

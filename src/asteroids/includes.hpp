@@ -121,8 +121,9 @@ namespace impl {
 	}
 
 	// Adds back the extra fields of an entity id. Add Field(af)
-	inline flecs::entity af(u32 id) {
-		return getEntityWorld().get_alive(id);
+	template<typename Integer>
+	inline flecs::entity af(Integer id) {
+		return getEntityWorld().get_alive((u64)id);
 	}
 }
 

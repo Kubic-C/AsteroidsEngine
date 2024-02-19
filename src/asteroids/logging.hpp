@@ -83,7 +83,7 @@ public:
 		decoratorMap[DECORATOR_WHITE]  = ANSI_WHITE;
 		decoratorMap[DECORATOR_RESET]  = ANSI_RESET;
 
-		logFile.open("log.ftxt");
+		logFile.open(std::string("log") + std::to_string(time(nullptr)) + ".txt");
 	}
 
 	~Logger() {
@@ -93,13 +93,13 @@ public:
 
 	// Will simply print to the console
     template<typename ... Params>
-	void operator()(const char* format, Params&& ... args) {
+	void operator()(const std::string& format, Params&& ... args) {
 		_log(ERROR_SEVERITY_NONE, format, args...);
 	}
 
 	// Will print to the console but may throw an exception depending on the severity level
     template<typename ... Params>
-	void operator()(ErrorSeverity severity, const char* format, Params&& ... args) {
+	void operator()(ErrorSeverity severity, const std::string& format, Params&& ... args) {
 		_log(severity, format, args...);
 	}
 
@@ -145,8 +145,8 @@ private:
 	}
 
     template<typename ... Params>
-	void _log(ErrorSeverity severity, const char* cFormat, Params&& ... args) {
-		std::string output(cFormat);
+	void _log(ErrorSeverity severity, const std::string& format, Params&& ... args) {
+		std::string output(format);
 		
 		if(severity == ERROR_SEVERITY_FATAL)
 			output.insert(0, "<red, bold>Fatal Error: <reset>");

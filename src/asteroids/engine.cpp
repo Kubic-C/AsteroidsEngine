@@ -170,9 +170,6 @@ void init() {
 	engine->entityWorldNetwork = std::make_shared<EntityWorldNetworkManager>();
 	CoreModule::registerCore();
 
-	int32_t maxMessageSize = 1000000; // 1 mega byte
-	engine->util->SetConfigValue(k_ESteamNetworkingConfig_SendBufferSize, k_ESteamNetworkingConfig_Global, 0,  k_ESteamNetworkingConfig_Int32, &maxMessageSize);
-
 	// For testing the network :)
 	float FakePacketLoss_Send      = 0;
 	float FakePacketLoss_Recv      = 0;
