@@ -82,7 +82,7 @@ enum class ShapeEnum : u8 {
 };
 
 template<typename S>
-void serialize(S& s, ShapeEnum e) {
+void serialize(S& s, ShapeEnum& e) {
 	s.value1b(e);
 }
 
@@ -591,7 +591,7 @@ public:
 		Shape& shape = getShape(id);
 
 		SpatialIndexElement element;
-		element.entityId = impl::cf(flecsId);
+		element.entityId = impl::cf<u32>(flecsId);
 		element.shapeId = id;
 		AABB aabb = shape.getAABB();
 		element.min = aabb.min;
@@ -614,7 +614,7 @@ private:
 
 private:
 	SpatialIndexTree rtree;
-	std::unordered_map<u32, std::variant<Circle, Polygon>> shapes;
+	boost::container::flat_map<u32, std::variant<Circle, Polygon>> shapes;
 	u32 idCounter = 0;
 };
 

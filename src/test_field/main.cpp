@@ -123,7 +123,7 @@ protected:
 		addr.SetIPv4(0, 9999);
 		networkManager.open(addr);
 
-		flecs::entity test = getEntityWorldNetworkManager().entity();
+		flecs::entity test = getNetworkStateManager().entity();
 		test.add<TestComponent>().add<NetworkedEntity>().set([](TransformComponent& transform, ShapeComponent& comp) {
 			PhysicsWorld& world = getPhysicsWorld();
 
@@ -227,7 +227,7 @@ int main(int argc, char* argv[]) {
 	registerState<ViewState>();
 	transitionState<InitState>();
 
-	EntityWorldNetworkManager& worldNetworkManager = getEntityWorldNetworkManager();
+	NetworkStateManager& worldNetworkManager = getNetworkStateManager();
 	worldNetworkManager.registerComponent<TestComponent>();
 	
 	auto q = getEntityWorld().query<ShapeComponent>();

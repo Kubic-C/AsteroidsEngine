@@ -74,12 +74,6 @@ void setWindow(std::shared_ptr<sf::RenderWindow> window);
 
 sf::RenderWindow& getWindow();
 
-void enableSnapshots();
-void disableSnapshots();
-NetworkSnapshotManager& getNetworkSnapshotManager();
-bool isSnapshotsEnabled();
-
-
 void setFps(u32 fps);
 
 void setTps(float tps);

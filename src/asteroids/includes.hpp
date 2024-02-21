@@ -10,6 +10,9 @@
 #include <bitset>
 #include <set>
 
+// Boost
+#include <boost/container/flat_map.hpp>
+
 // Networking
 #include <steam/isteamnetworkingsockets.h>
 #include <steam/isteamnetworkingmessages.h>
@@ -116,8 +119,9 @@ extern flecs::world& getEntityWorld();
 
 namespace impl {
 	// Clears the extra fields of an entity id. Clear Field (cf)
-	inline u32 cf(u64 id) {
-		return id & ECS_ENTITY_MASK;
+	template<typename Integer>
+	inline Integer cf(u64 id) {
+		return static_cast<Integer>(id & ECS_ENTITY_MASK);
 	}
 
 	// Adds back the extra fields of an entity id. Add Field(af)

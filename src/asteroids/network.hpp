@@ -66,7 +66,7 @@ public:
 
 
 	MessageBuffer(MessageBuffer&& other) noexcept
-        : capacity(other.capacity), size(other.size), data(other.data), hasOwnership(true) {
+		: capacity(other.capacity), size(other.size), data(other.data), hasOwnership(true) {
 		other.setOwner(false);
 		other.reset();
 	}
@@ -77,10 +77,10 @@ public:
 		}
 	}
 
-    NODISCARD size_t getSize() const { return size; }
-    NODISCARD const u8* getData() const { return data; }
+	NODISCARD size_t getSize() const { return size; }
+	NODISCARD const u8* getData() const { return data; }
 	u8* getData() { return data; }
-    NODISCARD bool isOwner() const { return hasOwnership; }
+	NODISCARD bool isOwner() const { return hasOwnership; }
 
 	// will this resource automatically be free'd?
 	void setOwner(bool isOwner) {
@@ -141,7 +141,7 @@ public:
 
 	u8& operator[](size_t index) {
 		assert(data);
-        assert(index < size - 1);
+		assert(index < size - 1);
 
 		return data[index];
 	}
@@ -181,33 +181,33 @@ typedef ::bitsery::Deserializer<InputAdapter> Deserializer;
 AE_NAMESPACE_END
 
 namespace bitsery::traits {
-    template<>
-    struct BufferAdapterTraits<::ae::MessageBuffer> {
-        using TIterator = uint8_t*;
-        using TConstIterator = const uint8_t*;
-        using TValue = uint8_t;
+	template<>
+	struct BufferAdapterTraits<::ae::MessageBuffer> {
+		using TIterator = uint8_t*;
+		using TConstIterator = const uint8_t*;
+		using TValue = uint8_t;
 
-        static void increaseBufferSize(::ae::MessageBuffer& buffer, size_t currOffset, size_t newOffset) {
-            buffer.addSize((u32)newOffset - (u32)currOffset);
-        }
-    };
+		static void increaseBufferSize(::ae::MessageBuffer& buffer, size_t currOffset, size_t newOffset) {
+			buffer.addSize((u32)newOffset - (u32)currOffset);
+		}
+	};
 
-    template<>
-    struct ContainerTraits<::ae::MessageBuffer> {
-        using TValue = uint8_t;
+	template<>
+	struct ContainerTraits<::ae::MessageBuffer> {
+		using TValue = uint8_t;
 
-        static constexpr bool isResizable = true;
-        static constexpr bool isContiguous = true;
+		static constexpr bool isResizable = true;
+		static constexpr bool isContiguous = true;
 
-        static void resize(::ae::MessageBuffer& buffer, size_t newSize) {
-            buffer.resize(newSize);
-        }
+		static void resize(::ae::MessageBuffer& buffer, size_t newSize) {
+			buffer.resize(newSize);
+		}
 
-        // get container size
-        static size_t size(const ::ae::MessageBuffer& buf) {
-            return buf.getSize();
-        }
-    };
+		// get container size
+		static size_t size(const ::ae::MessageBuffer& buf) {
+			return buf.getSize();
+		}
+	};
 }
 
 AE_NAMESPACE_BEGIN
@@ -234,10 +234,9 @@ inline bool endDeserialize(Deserializer& des) {
 
 enum MessageHeader: u8 {
 	MESSAGE_HEADER_INVALID = 0,
-	MESSAGE_HEADER_SNAPSHOT_COMPILATION_RELIABLE,
-	MESSAGE_HEADER_SNAPSHOT_COMPILATION_UNRELIABLE,
-	MESSAGE_HEADER_REQUEST_SNAPSHOT_FULL,
-	MESSAGE_HEADER_SNAPSHOT_FULL,
+	MESSAGE_HEADER_DELTA_SNAPSHOT,
+	MESSAGE_HEADER_REQUEST_FULL_SNAPSHOT,
+	MESSAGE_HEADER_FULL_SNAPSHOT,
 	MESSAGE_HEADER_CORE_LAST // it is named core in the case end-users also want to have multiple MessageHeader enums
 };
 
@@ -257,19 +256,13 @@ namespace impl {
 	};
 }
 
-class EntityWorldNetworkManager;
-class PhysicsWorldNetworkManager;
-
-EntityWorldNetworkManager& getEntityWorldNetworkManager();
-PhysicsWorldNetworkManager& getPhysicsWorldNetworkManager();
-
 /**
  * An abstract interface defining how connections and incoming messages are dealt with.
  */
 class NetworkInterface {
 	friend class NetworkManager;
 public:
-    virtual ~NetworkInterface() = default;
+	virtual ~NetworkInterface() = default;
 
 	virtual void update() {};
 	virtual bool shouldAcceptConnection(HSteamNetConnection conn) { return true; }
@@ -633,530 +626,6 @@ enum class ComponentPiority {
 
 struct NoPhase {};
 
-extern u64 getCurrentTick();
-
-class EntityWorldNetworkManager {
-	template<typename Integer>
-	static bool isIdValid(Integer id) {
-		return impl::af(id) != 0;
-	}
-
-	using SerCompIdType   = u32;
-	using SerEntityIdType = u32;
-	using SerSizeType     = u32;
-
-public:
-	EntityWorldNetworkManager() {
-		flecs::world& world = getEntityWorld();
-
-		registerComponent<NetworkedEntity>();
-		world.component<NetworkedComponent>();
-		world.add<ae::NetworkedEntity>(); // entity world should be Networked by default.
-
-		allEntityManagement.push_back(
-			world.observer()
-			.term<NetworkedEntity>()
-			.event(flecs::OnRemove).each([this](flecs::entity e) {
-				entitiesDestroyed.insert(impl::cf(e));
-			}));
-	}
-
-	~EntityWorldNetworkManager() {
-		for(flecs::entity e : allEntityManagement) {
-			e.destruct();
-		}
-
-		for (flecs::entity e : forceComponentChangeSystem) {
-			e.destruct();
-		}
-	}
-
-	void serializeHighPiorityComponentUpdates(Serializer& ser) {
-		serializeComponentSnapshot(highPiorityComponentsUpdates, ser);
-	}
-
-	void serializeLowPiorityComponentUpdates(Serializer& ser) {
-		serializeComponentSnapshot(lowPiorityComponentsUpdates, ser);
-	}
-
-	bool isHighPiorityComponentSnapshotReady() {
-		return !highPiorityComponentsUpdates.empty();
-	}
-
-	bool isLowPiorityComponentSnapshotReady() {
-		return !lowPiorityComponentsUpdates.empty();
-	}
-
-	bool isEntityComponentMetaSnapshotReady() {
-		return !componentsCreated.empty() ||
-			   !componentsDestroyed.empty() ||
-			   !entitiesDestroyed.empty() ||
-			   !entitiesEnabled.empty() ||
-			   !entitiesDisabled.empty();
-	}
-
-	void serializeEntityComponentMetaSnapshot(Serializer& ser, bool noDestroyed = false) {
-		flecs::world& world = getEntityWorld();
-
-		if (world.is_deferred())
-			log(ERROR_SEVERITY_FATAL, "World must not be in deferred mode when calling serializeEntityComponentMetaSnapshot");
-
-		// Note:
-		// Instead of serializing std::vector<> (which we CAN do) we instead serialize the size
-		// and then all of its elements. I hear you say: Well why would we do that, you now have to make extra
-		// call to the serializer?! Well the reason is to avoid allocating on the heap on the deserialization side.
-		// It is also makes more sense on the deserialization side because it needs to handle
-		// one component/entity at a time instead of all at once.
-		// 
-		// Is it boilerplate?
-		//	Yes it is. 
-		// Do I care? 
-		//	No. 
-		// Will I write a 4 line helper function that will solve the boilerplate?
-		//	No I don't think I will.
-
-		// Must serialize: 
-		//  - Created Components
-		//	- Destroyed Components
-		//  - Destroyed entities
-		//  - Enabled entities
-		//  - Disabled entities
-
-		// Created Components
-		cache.archetypeComponent.clear();
-		for (auto& pair : componentsCreated) {
-			if (!isIdValid(pair.first)) {
-				continue;
-			}
-
-			cache.extractIdsFromSet(pair.second);
-
-			cache.archetypeComponent[cache.idList].push_back(pair.first);
-		}
-
-		ser.object((SerSizeType)cache.archetypeComponent.size());
-		for (auto& pair : cache.archetypeComponent) {
-			// Serialize the order of components
-			const auto& componentTypes = pair.first;
-			ser.object((SerSizeType)componentTypes.size()); // entity component type count
-			for (SerCompIdType compType : componentTypes) { // entity component types
-				ser.object(compType);
-			}
-
-			// Then serialize all entity-components
-			ser.object((SerSizeType)pair.second.size());
-			for (SerEntityIdType entityId : pair.second) {
-				ser.object(entityId);
-			}
-		}
-
-		// Destroyed Components and Destroyed entites have to be skipped in full snapshots
-		if(noDestroyed) {
-			ser.object((SerSizeType)0);
-			ser.object((SerSizeType)0);
-			goto disabledOrEnabled;
-		}
-		
-		cache.archetypeComponent.clear();
-		for (auto& pair : componentsDestroyed) {
-			if (!isIdValid(pair.first)) {
-				continue;
-			}
-			
-			cache.extractIdsFromSet(pair.second);
-
-			cache.archetypeComponent[cache.idList].push_back(pair.first);
-		}
-
-		ser.object((SerSizeType)cache.archetypeComponent.size());
-		for (auto& pair : cache.archetypeComponent) {
-			// Serialize the order of components
-			const auto& componentTypes = pair.first;
-			ser.object((SerSizeType)componentTypes.size()); // entity component type count
-			for (SerCompIdType compType : componentTypes) { // entity component types
-				ser.object(compType);
-			}
-
-			// Then serialize all entity-components
-			ser.object((SerSizeType)pair.second.size());
-			for (SerEntityIdType entityId : pair.second) {
-				ser.object(entityId);
-			}
-		}
-
-		// Destroyed entities
-
-		ser.object((SerSizeType)entitiesDestroyed.size());
-		for(SerEntityIdType id : entitiesDestroyed) {
-			ser.object(id);
-		}
-
-	disabledOrEnabled:
-
-		// Enabled entities
-
-		ser.object((SerSizeType)entitiesEnabled.size());
-		for (SerEntityIdType id : entitiesEnabled) {
-			ser.object(id);
-		}
-
-		// Disabled entities
-
-		ser.object((SerSizeType)entitiesDisabled.size());
-		for (SerEntityIdType id : entitiesDisabled) {
-			ser.object(id);
-		}
-
-		// very important to make sure we don't forget to clear these!
-		componentsCreated.clear();
-		if(!noDestroyed) {
-			componentsDestroyed.clear();
-			entitiesDestroyed.clear();
-		}
-		entitiesEnabled.clear();
-		entitiesDisabled.clear();
-	}
-
-	void deserializeComponentSnapshot(Deserializer& des) {
-		flecs::world& world = getEntityWorld();
-
-		if (world.is_deferred())
-			log(ERROR_SEVERITY_FATAL, "World must not be in deferred mode when calling deserializeComponentSnapshot");
-
-		SerSizeType archetypeCount;
-		des.object(archetypeCount);
-		for(SerSizeType i = 0; i < archetypeCount; i++) {
-			// Getting id list of components
-			cache.idList.clear();
-			SerSizeType idListSize;
-			des.object(idListSize);
-			cache.idList.resize(idListSize);
-			for (SerSizeType compI = 0; compI < idListSize; compI++) { // entity component types
-				des.object((SerCompIdType)cache.idList[compI]);
-			}
-
-			// Now deserializing all the entity-component data
-			SerSizeType entityCount;
-			des.object(entityCount);
-			for(SerSizeType entityI = 0; entityI < entityCount; entityI++) {
-				SerEntityIdType serId;
-				des.object(serId);
-				flecs::entity e = world.ensure((u64)serId); 
-
-				for(SerCompIdType compId : cache.idList) {
-					deserializeRecords[compId](des, e.get_mut(impl::af(compId)));
-				}
-			} 
-		}
-	}
-
-	void deserializeEntityComponentMetaSnapshot(Deserializer& des) {
-		flecs::world& world = getEntityWorld();
-
-		if (world.is_deferred())
-			log(ERROR_SEVERITY_FATAL, "World must not be in deferred mode when calling deserializeEntityComponentMetaSnapshot");
-
-		// Created Components
-
-		SerSizeType archetypeCount = 0;
-		des.object(archetypeCount);
-		for (SerSizeType i = 0; i < archetypeCount; i++) {
-			// Deserialize the order of components
-			cache.idList.clear();
-			SerSizeType idListSize;
-			des.object(idListSize);
-			cache.idList.resize(idListSize);
-			for (SerSizeType compI = 0; compI < idListSize; compI++) { // entity component types
-				des.object((SerCompIdType)cache.idList[compI]);
-			}
-
-			// Then deserialize all entity-components
-			SerSizeType entityCount;
-			des.object(entityCount);
-			for (SerSizeType entityI = 0; entityI < entityCount; entityI++) {
-				SerEntityIdType serId;
-				des.object(serId);
-				flecs::entity e = world.ensure(serId);
-
-				for (SerCompIdType compId : cache.idList) {
-					e.add(impl::af(compId));
-				}
-			}
-		}
-
-		// Destroyed Components
-
-		des.object(archetypeCount);
-		for (u32 i = 0; i < archetypeCount; i++) {
-			// Deserialize the order of components
-			cache.idList.clear();
-			SerSizeType idListSize;
-			des.object(idListSize);
-			cache.idList.resize(idListSize);
-			for (SerSizeType compI = 0; compI < idListSize; compI++) { // entity component types
-				des.object((SerCompIdType)cache.idList[compI]);
-			}
-
-			// Then deserialize all entity-components
-			SerSizeType entityCount;
-			des.object(entityCount);
-			for (SerSizeType entityI = 0; entityI < entityCount; entityI++) {
-				SerEntityIdType serId;
-				des.object(serId);
-				flecs::entity e = world.ensure(serId);
-
-				for(SerCompIdType compId : cache.idList) {
-					e.remove(impl::af(compId));
-				}
-			}
-		}
-
-		// Destroyed entities
-
-		SerSizeType entityCount;
-		des.object(entityCount);
-		for (SerSizeType i = 0; i < entityCount; i++) {
-			SerEntityIdType serId;
-			des.object(serId);
-
-			if(!isIdValid(serId)) {
-				continue;
-			}
-	
-			impl::af(serId).destruct();
-		}
-
-		// Enabled entities
-
-		des.object(entityCount);
-		for (SerSizeType i = 0; i < entityCount; i++) {
-			SerEntityIdType serId;
-			des.object(serId);
-
-			if (!isIdValid(serId)) {
-				log(ERROR_SEVERITY_WARNING, "Possible dsync: recieved enabledEntities contained entity that ws not alive: %u\n", serId);
-				continue;
-			}
-
-			impl::af(serId).enable();
-		}
-
-		// Disabled entities
-
-		des.object(entityCount);
-		for (SerSizeType i = 0; i < entityCount; i++) {
-			SerEntityIdType serId;
-			des.object(serId);
-
-			if (!isIdValid(serId)) {
-				log(ERROR_SEVERITY_WARNING, "Possible dsync: recieved disabledEntites contained entity that ws not alive: %u\n", serId);
-				continue;
-			}
-
-			impl::af(serId).disable();
-		}
-	}
-
-	// this will force a component update, meaning all networked components of all networked entities
-	// will be put a single component update. When serializeComponentSnapshot() is called expect lag.
-	void yeildAllComponenents() {
-		highPiorityComponentsUpdates.clear();
-		for(flecs::system sys : forceComponentChangeSystem) {
-			sys.run();
-		}
-	}
-
-	template<typename T>
-	flecs::entity registerComponent(ComponentPiority piority = ComponentPiority::Low) {
-		flecs::world& world = getEntityWorld();
-
-		flecs::entity componentId = world.component<T>();
-		u32 rawId = impl::cf(componentId);
-
-		componentId.is_a<NetworkedComponent>();
-
-		allEntityManagement.push_back(
-			world.observer().term<T>()
-			.event(flecs::OnAdd).each([rawId, this](flecs::entity e) {
-				componentsCreated[impl::cf(e)].insert(rawId);
-        }));
-
-		allEntityManagement.push_back(
-			world.observer().term<T>()
-			.event(flecs::OnRemove).each([rawId, this](flecs::entity e){
-				componentsDestroyed[impl::cf(e)].insert(rawId);
-        }));
-
-		registerIfNonEmptyComponent<T>(rawId, piority, std::is_empty<T>());
-
-		return componentId;
-	}
-
-	void enable(flecs::entity entity) {
-		entity.enable();
-		entitiesEnabled.push_back(impl::cf(entity));
-	}
-
-	void disable(flecs::entity entity) {
-		entity.disable();
-		entitiesDisabled.push_back(impl::cf(entity));
-	}
-
-	static flecs::entity entity() {
-		return getEntityWorld().entity().add<NetworkedEntity>();
-	}
-
-	void disableAllSerialization() {
-		for(flecs::entity e : allEntityManagement) {
-			e.disable();
-		}
-	}
-
-protected:
-	template<typename T>
-	void registerIfNonEmptyComponent(u32 rawId, ComponentPiority piority, std::true_type) {
-		flecs::world& world = getEntityWorld();
-		
-		forceComponentChangeSystem.push_back(
-			 world.system().term<T>()
-			.template kind<NoPhase>()
-			.each([rawId, this](flecs::entity e) {
-				componentsCreated[impl::cf(e)].insert(rawId);
-			}));
-
-        (void)piority;
-	}
-
-	template<typename T>
-	void registerIfNonEmptyComponent(u32 rawId, ComponentPiority piority, std::false_type) {
-		flecs::world& world = getEntityWorld();
-
-		serializeRecords[rawId] =
-			[](Serializer& ser, void* data) {
-			ser.object(*(T*)data);
-			};
-
-		deserializeRecords[rawId] =
-			[](Deserializer& des, void* data) {
-			des.object(*(T*)data);
-			};
-
-		if (piority == ComponentPiority::Low) {
-			allEntityManagement.push_back(
-				world.observer<T>()
-				.event(flecs::OnSet).each([rawId, this](flecs::entity e, T& comp) {
-					lowPiorityComponentsUpdates[impl::cf(e)].insert(rawId);
-					}));
-
-			allEntityManagement.push_back(
-				world.observer<T>()
-				.event(flecs::OnAdd).each([rawId, this](flecs::entity e, T& comp) {
-					lowPiorityComponentsUpdates[impl::cf(e)].insert(rawId);
-					}));
-		}
-		else {
-			allEntityManagement.push_back(
-				world.observer<T>()
-				.event(flecs::OnSet).each([rawId, this](flecs::entity e, T& comp) {
-					highPiorityComponentsUpdates[impl::cf(e)].insert(rawId);
-					}));
-
-			allEntityManagement.push_back(
-				world.observer<T>()
-				.event(flecs::OnAdd).each([rawId, this](flecs::entity e, T& comp) {
-					highPiorityComponentsUpdates[impl::cf(e)].insert(rawId);
-					}));
-		}
-
-		forceComponentChangeSystem.push_back(
-			world.system<T>()
-			.template kind<NoPhase>()
-			.each([rawId, this](flecs::entity e, T& comp) {
-				highPiorityComponentsUpdates[impl::cf(e)].insert(rawId);
-			}));
-	}
-
-	void serializeComponentSnapshot(std::unordered_map<SerEntityIdType, std::unordered_set<SerCompIdType>>& componentsChanged, Serializer& ser) {
-		flecs::world& world = getEntityWorld();
-
-		if (world.is_deferred())
-			log(ERROR_SEVERITY_FATAL, "World must not be in deferred mode when calling serializeComponentSnapshot");
-
-		// Must serialize: 
-		//	- Components changed
-
-		// Instead of associating entities with their changed components
-		// we are associating a set of changed components with a list of entities.
-		cache.archetypeComponent.clear();
-		for (auto& pair : componentsChanged) {
-			if (impl::af(pair.first) == 0)
-				continue;
-
-			cache.extractIdsFromSet(pair.second);
-
-			cache.archetypeComponent[cache.idList].push_back(pair.first);
-		}
-
-		ser.object((SerSizeType)cache.archetypeComponent.size());
-		for (auto& pair : cache.archetypeComponent) {
-			// Serialize the order of components
-			const auto& componentTypes = pair.first;
-			ser.object((SerSizeType)componentTypes.size()); // entity component type count
-			for (SerCompIdType compType : componentTypes) { // entity component types
-				ser.object(compType);
-			}
-
-			// Then serialize all entity-components
-			ser.object((SerSizeType)pair.second.size());
-			for (SerEntityIdType entityId : pair.second) {
-				ser.object(entityId);
-
-				for (SerCompIdType compId : pair.first) {
-					flecs::entity entity = impl::af(entityId);
-					flecs::entity component = impl::af(compId);
-
-					serializeRecords[compId](ser, entity.get_mut(component));
-				}
-			}
-		}
-
-		componentsChanged.clear();
-	}
-
-	// Putting vectors and maps in cache will mean less calls to malloc and free
-	// as the capacity of both containers goes up
-	struct Cache {
-		template<typename Set>
-		void extractIdsFromSet(Set& set) {
-			idList.clear();
-			for (auto it = set.begin(); it != set.end(); ) {
-				idList.push_back(std::move(set.extract(it++).value()));
-			}
-		}
-
-		std::vector<SerCompIdType> idList;
-		std::map<std::vector<SerCompIdType>, std::vector<SerEntityIdType>> archetypeComponent;
-	} cache;
-
-	std::vector<flecs::entity> allEntityManagement;
-	std::vector<flecs::system> forceComponentChangeSystem;
-
-	std::unordered_map<SerCompIdType, std::function<void(Serializer& ser, void* data)>> serializeRecords;
-	std::unordered_map<SerCompIdType, std::function<void(Deserializer& ser, void* data)>> deserializeRecords;
-
-	std::unordered_map<SerEntityIdType, std::unordered_set<SerCompIdType>> highPiorityComponentsUpdates;
-	std::unordered_map<SerEntityIdType, std::unordered_set<SerCompIdType>> lowPiorityComponentsUpdates;
-
-	std::unordered_map<SerEntityIdType, std::set<SerCompIdType>> componentsCreated;
-	std::unordered_map<SerEntityIdType, std::set<SerCompIdType>> componentsDestroyed;
-	std::unordered_set<SerEntityIdType> entitiesDestroyed;
-	std::vector<SerEntityIdType> entitiesEnabled;
-	std::vector<SerEntityIdType> entitiesDisabled;
-};
-
-/* Physics Syncing */
-
-// Must be defined here so it may be used with PhysicsWorldNetworkManager
 struct ShapeComponent : public NetworkedComponent {
 	u32 shape = UINT32_MAX;
 
@@ -1170,337 +639,795 @@ struct ShapeComponent : public NetworkedComponent {
 	}
 };
 
-class PhysicsWorldNetworkManager {
+extern u64 getCurrentTick();
+extern u64 getCurrentStateId();
+extern void transitionState(u64 id, bool immediate);
+
+namespace impl {
+	enum SnapshotFlags : u8 {
+		STATE = 1 << 0,
+		PHYSICS_SNAPSHOT = 1 << 1,
+		META_DATA_SNAPSHOT = 1 << 2,
+		COMPONENT_UPDATE_SNAPSHOT = 1 << 3,
+		LOW_PIORITY = 1 << 4 // Does this snapshot contain low piority data?
+	};
+
+	template<typename K, typename T>
+	using FastMap = boost::container::flat_map<K, T>;
+}
+
+template<typename S>
+void serialize(S& s, impl::SnapshotFlags& flags) {
+	s.value1b(flags);
+}
+
+class NetworkStateManager;
+
+NetworkStateManager& getNetworkStateManager();
+
+/**
+ * @brief the network state manager is responsible for creating snapshots
+ * of the application's current state that can be sent to clients. It is also
+ * used for deserilizing these snapshots client side.
+ */
+class NetworkStateManager {
+	using ListSize = u32;
+	using CompId = u32;
+	using EntityId = u32;
+	using PhysicsId = u32;
+
 public:
-	PhysicsWorldNetworkManager() {
-		query = getEntityWorld().query<ShapeComponent>();
-	}
-
-	bool isPhysicsWorldSnapshotReady() {
-		PhysicsWorld& physicsWorld = getPhysicsWorld();
-
-		query.iter([&](flecs::iter& iter, ShapeComponent* shapesArray) {
-			for (auto i : iter) {
-				Shape& shape = physicsWorld.getShape(shapesArray[i].shape);
-
-				if (shape.isNetworkDirty()) {
-					shapeUpdates[shape.getType()].push_back(shapesArray[i].shape);
-					shape.resetNetworkDirty();
-				}
-			}
-			});
-
-		return !shapeUpdates.empty();
-	}
-
-	void yieldAll() {
-		PhysicsWorld& physicsWorld = getPhysicsWorld();
-
-		query.iter([&](flecs::iter& iter, ShapeComponent* shapesArray) {
-			for (auto i : iter) {
-				Shape& shape = physicsWorld.getShape(shapesArray[i].shape);
-
-				shapeUpdates[shape.getType()].push_back(shapesArray[i].shape);
-				shape.resetNetworkDirty();
-			}
-			});
-	}
-
-	void serializePhysicsWorldSnapshot(Serializer& ser) {
-		PhysicsWorld& physicsWorld = getPhysicsWorld();
+	NetworkStateManager() {
+		auto& world = getEntityWorld();
 		
-		ser.object((u32)shapeUpdates[ShapeEnum::Polygon].size());
-		for (u32 shapeId : shapeUpdates[ShapeEnum::Polygon]) {
-			ser.object(shapeId);
-			ser.object(physicsWorld.getPolygon(shapeId));
+		registerComponent<NetworkedEntity>();
+		world.add<NetworkedEntity>();
+
+		flecs::entity addObserver = world.observer()
+			.term<NetworkedEntity>()
+			.event(flecs::OnRemove).each([this](flecs::entity e) {
+				deltaSnapshot.resetEntity(impl::cf<EntityId>(e));
+				deltaSnapshot.metaData.removeEntities.insert(impl::cf<EntityId>(e));
+			});
+
+		allObservers.push_back(addObserver);
+
+		flecs::entity getAllBodiesSystem = world.system<ShapeComponent>().kind<NoPhase>().each([this](ShapeComponent& shapeId){
+			if(!shapeId.isValid())
+				return;
+
+			Shape& shape = getPhysicsWorld().getShape(shapeId.shape);
+			fullSnapshot.physicsSnapshot.bodiesToUpdate[shape.getType()].push_back(shapeId.shape);
+		});
+
+		allSystems.push_back(getAllBodiesSystem);
+
+		deltaSnapshot.physicsSnapshot.query = world.query<ShapeComponent>();
+	}
+
+	~NetworkStateManager() {
+		deltaSnapshot.physicsSnapshot.query.destruct();
+
+		for(flecs::entity observer : allObservers) {
+			observer.destruct();
 		}
 
-		ser.object((u32)shapeUpdates[ShapeEnum::Circle].size());
-		for (u32 shapeId : shapeUpdates[ShapeEnum::Circle]) {
-			ser.object(shapeId);
-			ser.object(physicsWorld.getCircle(shapeId));
-		}
-
-		for (auto& pair : shapeUpdates) {
-			pair.second.clear();
+		for (flecs::entity system : allSystems) {
+			system.destruct();
 		}
 	}
 
-	static void deserializePhysicsWorldSnapshot(Deserializer& des) {
-		PhysicsWorld& physicsWorld = getPhysicsWorld();
+	std::string getNetworkedEntityInfo() {
+		std::string info;
 
-		u32 listSize;
-		des.object(listSize);
-		for (u32 i = 0; i < listSize; i++) {
-			u32 shapeId;
-			des.object(shapeId);
+		flecs::world& world = getEntityWorld();
 
-			Polygon* polygon;
-
-			if (physicsWorld.doesShapeExist(shapeId)) {
-				polygon = &physicsWorld.getPolygon(shapeId);
+		auto q = world.query_builder().term<NetworkedEntity>().build();
+	
+		std::vector<flecs::entity> entities;
+		q.iter([&](flecs::iter& iter) {
+			for(auto i : iter) {
+				entities.push_back(iter.entity(i));
 			}
-			else {
-				polygon = &physicsWorld.getPolygon(physicsWorld.insertShape<Polygon>(shapeId));
-			}
+		});
+		q.destruct();
 
-			des.object(*polygon);
-			polygon->markLocalDirty();
+
+		for(flecs::entity entity : entities) {
+			info += formatString("<bold>Entity %u %u<reset>\n", impl::cf<u32>(entity.id()), (u32)ECS_GENERATION(entity.id()));
+
+			entity.each([&](flecs::id comp) {
+				info += formatString("\t%s - %u\n", comp.str().c_str(), impl::cf<u32>(comp.raw_id()));
+			});
 		}
 
-		des.object(listSize);
-		for (u32 i = 0; i < listSize; i++) {
-			u32 shapeId;
-			des.object(shapeId);
+		return info;
+	}
 
-			Circle* circle;
+	flecs::entity entity() {
+		return ae::getEntityWorld().entity().add<NetworkedEntity>();
+	}
 
-			if (physicsWorld.doesShapeExist(shapeId)) {
-				circle = &physicsWorld.getCircle(shapeId);
-			}
-			else {
-				circle = &physicsWorld.getCircle(physicsWorld.insertShape<Circle>(shapeId));
-			}
+	flecs::entity enable(flecs::entity e) {
+		e.enable();
+		deltaSnapshot.needActive(e, MetaDataSnapshot::DO_ENABLE);
+		return e;
+	}
 
-			des.object(*circle);
-			circle->markLocalDirty();
-		}
+	flecs::entity disable(flecs::entity e) {
+		e.disable();
+		deltaSnapshot.needActive(e, MetaDataSnapshot::DO_DISABLE);
+		return e;
+	}
+
+	template<typename ComponentType>
+	void registerComponent(ComponentPiority piority = ComponentPiority::Low) {
+		auto& entityWorld = getEntityWorld();
+
+		flecs::entity component = entityWorld.component<ComponentType>();
+		CompId id = impl::cf<CompId>(component); 
+
+		ae::log("%s - %u\n", typeid(ComponentType).name(), (u32)id);
+
+		ComponentInfo& info = registeredComponents[id];
+
+		info.piority = piority;
+
+		registerComponentInfo<ComponentType>(id, piority, std::is_empty<ComponentType>());
+
+		// Adding and Destroying component type 
+		flecs::entity addObserver = entityWorld.observer().term<ComponentType>().event(flecs::OnAdd).each([this, id](flecs::entity entity){
+			deltaSnapshot.needAdd(entity, id);
+		});
+
+		flecs::entity removeObserver = entityWorld.observer().term<ComponentType>().event(flecs::OnRemove).each([this, id](flecs::entity entity) {
+			deltaSnapshot.needRemove(entity, id);
+		});
+
+		allObservers.push_back(addObserver);
+		allObservers.push_back(removeObserver);
 	}
 
 private:
-	std::unordered_map<ShapeEnum, std::vector<u32>> shapeUpdates;
-	flecs::query<ShapeComponent> query;
-};
+	template<typename TagType>
+	void registerComponentInfo(CompId id, ComponentPiority piority, std::true_type isEmpty) {
+		ComponentInfo& info = registeredComponents[id];
 
-extern u64 getCurrentStateId();
-extern void transitionState(u64 id, bool immediate);
-extern bool hasStateChanged();
+		info.ser = nullptr;
+		info.des = nullptr;
 
-namespace impl {
-	enum SnapshotBitIndexes : u8 {
-		STATE_SERIALIZED = 1 << 0,
-		PHYSICS_SERIALIZED = 1 << 1,
-		META_SERIALIZED = 1 << 2,
-		HIGH_PIORITY_SERIALIZED = 1 << 3,
-		LOW_PIORITY_SERIALIZED = 1 << 4
-	};
-}
+		flecs::entity fullsnapshotTagAdd = getEntityWorld().system().term<TagType>().kind<NoPhase>().each([this, id](flecs::entity entity) {
+			fullSnapshot.tags[impl::cf<EntityId>(entity)].insert(id);
+		});
 
-/**
- * The snapshot manager is responsible for putting together
- * of what happens in between frames.
- */
-class NetworkSnapshotManager {
+		allSystems.push_back(fullsnapshotTagAdd);
+	}
+
+	template<typename ComponentType>
+	void registerComponentInfo(CompId id, ComponentPiority piority, std::false_type isEmpty) {
+		auto& entityWorld = getEntityWorld();
+		ComponentInfo& info = registeredComponents[id];
+
+		info.ser =
+			[](Serializer& ser, const void* data) {
+				ser.object(*(const ComponentType*)data);
+			};
+
+		info.des =
+			[](Deserializer& des, void* data) {
+				des.object((ComponentType&)*(ComponentType*)data);
+			};
+
+		flecs::entity addObserver = entityWorld.observer().term<ComponentType>().event(flecs::OnAdd).each([this, id](flecs::entity entity) {
+			deltaSnapshot.needUpdate(entity, id, registeredComponents);
+		});
+		flecs::entity setObserver = entityWorld.observer().term<ComponentType>().event(flecs::OnSet).each([this, id](flecs::entity entity) {
+			deltaSnapshot.needUpdate(entity, id, registeredComponents);
+		});
+
+		allObservers.push_back(addObserver);
+		allObservers.push_back(setObserver);
+
+		flecs::entity fullsnapshotComponentAdd = entityWorld.system().term<ComponentType>().kind<NoPhase>().each([this, id](flecs::entity entity) {
+			fullSnapshot.components[impl::cf<EntityId>(entity)].insert(id);
+		});
+
+		allSystems.push_back(fullsnapshotComponentAdd);
+	}
+
 public:
-	NetworkSnapshotManager() 
-		: reliableSnapshotser(startSerialize(reliableSnapshots)), unreliableSnapshotser(startSerialize(unreliableSnapshots)) {}
+	/*
+	 * @brief Create a delta compresesed snapshot that may be sent to clients.
+	 * @param reliableBuffer Data that must be sent reliably (meaning no or minimal packet loss)
+	 * @param unreliableBuffer Data that can be sent unreliably and will not
+	 * heavily impact the client when recieved.
+	 */
+	void createDeltaSnapshot(MessageBuffer& reliableBuffer, MessageBuffer& unreliableBuffer) {
+		Serializer ser = startSerialize(reliableBuffer);
 
-	MessageBuffer& getReliableSnapshotCompilation() {
-		return reliableSnapshots;
-	}
+		deltaSnapshot.flags = impl::STATE | impl::META_DATA_SNAPSHOT | impl::PHYSICS_SNAPSHOT | impl::COMPONENT_UPDATE_SNAPSHOT;
 
-	MessageBuffer& getUnreliableSnapshotCompilation() {
-		return unreliableSnapshots;
-	}
+		deltaSnapshot.physicsSnapshot.checkForDirty();
 
-	static void serializeFullSnapshot(MessageBuffer& buffer) {
-		EntityWorldNetworkManager& world = getEntityWorldNetworkManager();
-		PhysicsWorldNetworkManager& physics = getPhysicsWorldNetworkManager();
+		// HEADER
+		ser.object(MESSAGE_HEADER_DELTA_SNAPSHOT);
+		ser.object(deltaSnapshot.flags);
 
-		world.yeildAllComponenents();
-		physics.yieldAll();
-
-		Serializer ser = startSerialize(buffer);
-		ser.object(MESSAGE_HEADER_SNAPSHOT_FULL);
+		// State
 		ser.object(getCurrentStateId());
-		physics.serializePhysicsWorldSnapshot(ser);
-		world.serializeEntityComponentMetaSnapshot(ser);
-		world.serializeHighPiorityComponentUpdates(ser);
-        endSerialize(ser, buffer);
+
+		// Meta Data
+		MetaDataSnapshot& metaData = deltaSnapshot.metaData;
+		serializeSet(ser, metaData.removeEntities);
+		sortByArchetypes(metaData.toAdd);
+		serializeArchetypes(ser, cache.archetypeMap, nullptr);
+		sortByArchetypes(metaData.toRemove);
+		serializeArchetypes(ser, cache.archetypeMap, nullptr);
+		serializeMap(ser, metaData.toUpdateActive);
+
+		// Physics Data
+		auto& physicsWorld = getPhysicsWorld();
+		PhysicsSnapshot& physicsData = deltaSnapshot.physicsSnapshot;
+		serializePhysicsMap(ser, physicsData.bodiesToUpdate, [&](Serializer& ser, ShapeEnum shapeEnum, PhysicsId id){
+			switch(shapeEnum) {
+			case ShapeEnum::Circle:
+				ser.object(physicsWorld.getCircle((u32)id));
+				break;
+			case ShapeEnum::Polygon:
+				ser.object(physicsWorld.getPolygon((u32)id));
+				break;
+
+			default:
+				assert(!"Invalid shape enum");
+				break;
+			}
+		});
+
+		// High Piortiy Component Updates
+		sortByArchetypes(deltaSnapshot.componentData[(int)ComponentPiority::High].toUpdate);
+		serializeArchetypes(ser, cache.archetypeMap, [&](Serializer& ser, EntityId entityId, CompId compId){
+			flecs::entity entity = impl::af(entityId);
+
+			assert(entity.is_alive());
+
+			registeredComponents[compId].ser(ser, entity.get(compId));
+		});
+
+		endSerialize(ser, reliableBuffer);
+
+		/* UNRELIABLE MESSAGE */
+
+		deltaSnapshot.flags = impl::COMPONENT_UPDATE_SNAPSHOT | impl::LOW_PIORITY;
+
+		ser = startSerialize(unreliableBuffer);
+
+		// Header
+		ser.object(MESSAGE_HEADER_DELTA_SNAPSHOT);
+		ser.object(deltaSnapshot.flags);
+
+		// Low Piortiy Component Updates
+		sortByArchetypes(deltaSnapshot.componentData[(int)ComponentPiority::Low].toUpdate);
+		serializeArchetypes(ser, cache.archetypeMap, [&](Serializer& ser, EntityId entityId, CompId compId) {
+			flecs::entity entity = impl::af(entityId);
+
+			registeredComponents[compId].ser(ser, entity.get(compId));
+		});
+
+		endSerialize(ser, unreliableBuffer);
+
+		deltaSnapshot.resetAll();
 	}
 
-	void beginSnapshotCompilation() {
-		u64 tickCount = getCurrentTick();
+	/**
+	 * @brief Updates the games current state with a delta snapshot
+	 */
+	void updateWithDeltaSnapshot(Deserializer& des) {
+		auto& entityWorld = getEntityWorld();
+		auto& physicsWorld = getPhysicsWorld();
 
-		clearSnapshotCompilation();
+		entityWorld.enable_range_check(false);
 
-		reliableSnapshotser = startSerialize(reliableSnapshots);
-		reliableSnapshotser.object(MESSAGE_HEADER_SNAPSHOT_COMPILATION_RELIABLE);
-		reliableSnapshotser.object(tickCount);
-
-		unreliableSnapshotser = startSerialize(unreliableSnapshots);
-		unreliableSnapshotser.object(MESSAGE_HEADER_SNAPSHOT_COMPILATION_UNRELIABLE);
-		unreliableSnapshotser.object(tickCount);
-		compilationStarted = true;
-	}
-
-	void endSnapshotCompilation() {
-		compilationStarted = false;
-		endSerialize(unreliableSnapshotser, unreliableSnapshots);
-		endSerialize(reliableSnapshotser, reliableSnapshots);
-	}
-
-	void clearSnapshotCompilation() {
-		compilationStarted = false;
-		reliableSnapshots.reset();
-		unreliableSnapshots.reset();
-	}
-
-	bool hasSnapshotCompilationStarted() const {
-		return compilationStarted;
-	}
-
-	void updateNetworkChanges() {
-		serializeReliableSnapshot();
-		serializeUnreliableSnapshot();
-	}
-
-public: // static methods
-	static void deserializeSnapshotCompilationHeader(Deserializer& des, u64& startingTickNum) {
-		des.object(startingTickNum);
-	}
-
-	/* deserializes the header data of a snapshot into the output parameters */
-	static void deserializeSnapshotHeader(Deserializer& des, u8& flags, u32& size) {
+		u8 flags;
 		des.object(flags);
-		des.object(size);
-	}
 
-	static void deserializeSnapshotBuffer(Deserializer& des, u32 snapshotSize, MessageBuffer& buffer) {
-		size_t oldSize = buffer.getSize();
-
-		buffer.addSize(snapshotSize);
-		des.adapter().readBuffer<1, u8>(buffer.getData() + oldSize, (size_t)snapshotSize);
-	}
-
-	static void updateAllWithSnapshotBuffer(u8 flags, const MessageBuffer& buffer) {
-		if (flags == 0) {
-			return;
-		}
-		
-		flecs::world& world = getEntityWorld();
-		EntityWorldNetworkManager& worldManager = getEntityWorldNetworkManager();
-		PhysicsWorldNetworkManager& physicsManager = getPhysicsWorldNetworkManager();
-		Deserializer des = startDeserialize(buffer.getSize(), buffer.getData());
-
-		world.enable_range_check(false);
-
-		if (flags & impl::STATE_SERIALIZED) {
+		if(flags & impl::STATE) {
 			u64 stateId;
 			des.object(stateId);
 			transitionState(stateId, true);
 		}
-		if (flags & impl::PHYSICS_SERIALIZED)
-			physicsManager.deserializePhysicsWorldSnapshot(des);
-		if (flags & impl::META_SERIALIZED)
-			worldManager.deserializeEntityComponentMetaSnapshot(des);
-		if (flags & impl::HIGH_PIORITY_SERIALIZED)
-			worldManager.deserializeComponentSnapshot(des);
-		if(flags & impl::LOW_PIORITY_SERIALIZED)
-			worldManager.deserializeComponentSnapshot(des);
+		if(flags & impl::META_DATA_SNAPSHOT) {
+			// Entities to kill
+			deserializeSet<EntityId>(des, [&](EntityId id){
+				flecs::entity toDestroy = getEntityWorld().ensure(id);
 
-		world.enable_range_check(true);
+				toDestroy.destruct();
+			});
 
-		if (!endDeserialize(des)) {
-			ae::log(ae::ERROR_SEVERITY_WARNING, "Failed to deserialize unreliable snapshot: %i\n", (int)des.adapter().error());
+			// Components to add
+			deserializeArchetypes(des, [](Deserializer& des, flecs::entity entity, CompId compId){
+				entity.add(compId);
+			});
+			
+			// Components to remove
+			deserializeArchetypes(des, [](Deserializer& des, flecs::entity entity, CompId compId) {
+				entity.remove(compId);
+			});
+
+			// Disable or enable entities
+			deserializeMap<EntityId, u8>(des, [](EntityId id, u8 activeFlags){
+				flecs::entity entity = impl::af(id);
+
+				assert(entity.id() != 0);
+				assert(activeFlags);
+
+				if(activeFlags & MetaDataSnapshot::ActiveFlags::DO_ENABLE) {
+					entity.enable();
+				} else {
+					entity.disable();
+				}
+			});
+			
+		}
+		if (flags & impl::PHYSICS_SNAPSHOT) {
+			deserializePhysicsMap(des, [&](Deserializer& des, ShapeEnum shapeEnum, PhysicsId shortId){
+				u32 id = (u32)shortId;
+
+				switch (shapeEnum) {
+				case ShapeEnum::Circle:
+					if(physicsWorld.doesShapeExist(id))
+						des.object(physicsWorld.getCircle(id));
+					else
+						des.object(physicsWorld.getCircle(physicsWorld.insertShape<Circle>(id)));
+					break;
+				case ShapeEnum::Polygon:
+					if (physicsWorld.doesShapeExist(id))
+						des.object(physicsWorld.getPolygon(id));
+					else
+						des.object(physicsWorld.getPolygon(physicsWorld.insertShape<Polygon>(id)));
+					break;
+
+				default:
+					assert(!"Invalid shape enum");
+					break;
+				}
+
+				physicsWorld.getShape(id).markLocalDirty();
+			});
+
+		}
+		if (flags & impl::COMPONENT_UPDATE_SNAPSHOT) {
+			deserializeArchetypes(des, [&](Deserializer& des, flecs::entity entity, CompId compId) {
+				registeredComponents[compId].des(des, entity.get_mut((u64)compId));
+			});
+		}
+
+		entityWorld.enable_range_check(true);
+	}
+
+public:
+	/**
+	 * @brief Creates a full snapshot of the world
+	 */
+	void createFullSnapshot(MessageBuffer& buffer) {
+		auto& world = getEntityWorld();
+		auto& physicsWorld = getPhysicsWorld();
+
+		for(auto system : allSystems) {
+			world.system(system).run(0.0f);
+		}
+
+		Serializer ser = startSerialize(buffer);
+		ser.object(MESSAGE_HEADER_FULL_SNAPSHOT);
+		sortByArchetypes(fullSnapshot.tags);
+		serializeArchetypes(ser, cache.archetypeMap, nullptr);
+		sortByArchetypes(fullSnapshot.components);
+		serializeArchetypes(ser, cache.archetypeMap, [&](Serializer& ser, EntityId entityId, CompId compId) {
+			flecs::entity entity = impl::af(entityId);
+
+			registeredComponents[compId].ser(ser, entity.get(compId));
+		});
+		serializePhysicsMap(ser, fullSnapshot.physicsSnapshot.bodiesToUpdate, [&](Serializer& ser, ShapeEnum shapeEnum, PhysicsId id) {
+			switch (shapeEnum) {
+			case ShapeEnum::Circle:
+				ser.object(physicsWorld.getCircle((u32)id));
+				break;
+			case ShapeEnum::Polygon:
+				ser.object(physicsWorld.getPolygon((u32)id));
+				break;
+
+			default:
+				assert(!"Invalid shape enum");
+				break;
+			}
+		});
+		endSerialize(ser, buffer);
+
+		fullSnapshot.resetAll();
+	}
+
+	/**
+	 * @brief Updates the games current state with a full snapshot.
+	 * This will delete all networked entities and then reconstruct
+	 * the world according to the message.
+	 */
+	void updateWithFullSnapshot(Deserializer& des) {
+		flecs::world& entityWorld = getEntityWorld();
+		PhysicsWorld& physicsWorld = getPhysicsWorld();
+
+		entityWorld.enable_range_check(false);
+
+		entityWorld.delete_with<NetworkedEntity>();
+
+		deserializeArchetypes(des, [](Deserializer& des, flecs::entity entity, CompId compId) {
+			entity.add(compId);
+		});
+		deserializeArchetypes(des, [&](Deserializer& des, flecs::entity entity, CompId compId) {
+			registeredComponents[compId].des(des, entity.get_mut((u64)compId));
+		});
+		deserializePhysicsMap(des, [&](Deserializer& des, ShapeEnum shapeEnum, PhysicsId shortId) {
+			u32 id = (u32)shortId;
+
+			switch (shapeEnum) {
+			case ShapeEnum::Circle:
+				if (physicsWorld.doesShapeExist(id))
+					des.object(physicsWorld.getCircle(id));
+				else
+					des.object(physicsWorld.getCircle(physicsWorld.insertShape<Circle>(id)));
+				break;
+			case ShapeEnum::Polygon:
+				if (physicsWorld.doesShapeExist(id))
+					des.object(physicsWorld.getPolygon(id));
+				else
+					des.object(physicsWorld.getPolygon(physicsWorld.insertShape<Polygon>(id)));
+				break;
+
+			default:
+				assert(!"Invalid shape enum");
+				break;
+			}
+
+			physicsWorld.getShape(id).markLocalDirty();
+		});
+	
+		entityWorld.enable_range_check(true);
+	}
+
+private: /* Cache things */
+	template<typename T>
+	using Set = std::set<T>;
+
+	template<typename K, typename T>
+	using Map = std::map<K, T>;
+
+	struct Cache {
+		// used when reversing maps. Helps sort entities by
+		// components to update, allowing for smaller message size.
+		Map<std::set<CompId>, std::vector<EntityId>> archetypeMap;
+	} cache;
+private:
+	template<typename T>
+	using DesElementCallback = std::function<void(T)>;
+
+	template<typename F, typename S> // F = first, S = second
+	using DesPairCallback = std::function<void(F, S)>;
+
+	using DesPhysicsCallback = std::function<void(Deserializer& des, ShapeEnum, PhysicsId id)>;
+
+	using DesArchetypeCallback = std::function<void(Deserializer& des, flecs::entity, CompId)>;
+
+	Map<std::set<CompId>, std::vector<EntityId>>& sortByArchetypes(const Map<EntityId, Set<CompId>>& entityMap) {
+		cache.archetypeMap.clear();
+
+		for(auto& pair : entityMap) {
+			cache.archetypeMap[pair.second].push_back(pair.first);
+		}
+
+		return cache.archetypeMap;
+	}
+
+	void serializeArchetypes(Serializer& ser, Map<Set<CompId>, std::vector<EntityId>>& archetypes, const std::function<void(Serializer&, EntityId, CompId)>& serCompFunc) {
+		ser.object(static_cast<ListSize>(archetypes.size()));
+		for(auto& archetype : archetypes) {
+			serializeSet(ser, archetype.first); // Component Types
+			serializeEntityComponents(ser, archetype.second, archetype.first, serCompFunc); // Entity Types
 		}
 	}
 
-	static void deserializeFullSnapshot(Deserializer& des) {
-		EntityWorldNetworkManager& worldManager = getEntityWorldNetworkManager();
-		PhysicsWorldNetworkManager& physicsManager = getPhysicsWorldNetworkManager();
+	void serializeEntityComponents(Serializer& ser, const std::vector<EntityId>& entities, const Set<CompId>& components, const std::function<void(Serializer&, EntityId, CompId)>& serCompFunc) {
+		ser.object(static_cast<ListSize>(entities.size()));
+		for(auto entity : entities) {
+			ser.object(entity);
 
-		// must clear all current state! (Only the networked entities of course)
-		flecs::world& world = getEntityWorld();
-		world.remove<NetworkedEntity>();
-		world.delete_with<NetworkedEntity>();
-		world.add<NetworkedEntity>();
+			if(serCompFunc)
+				for(auto comp : components) {
+					serCompFunc(ser, entity, comp);
+				}
+		}
+	}
 
-		u64 stateId;
-		des.object(stateId);
-		transitionState(stateId, true);
-		getEntityWorld().enable_range_check(false);
-		physicsManager.deserializePhysicsWorldSnapshot(des);
-		worldManager.deserializeEntityComponentMetaSnapshot(des);
-		worldManager.deserializeComponentSnapshot(des);
-		getEntityWorld().enable_range_check(true);
+	void deserializeArchetypes(Deserializer& des, const DesArchetypeCallback& callback) {
+		ListSize archetypeCount;
+		des.object(archetypeCount);
+
+		std::vector<CompId> comps;
+		for (ListSize archetypeI = 0; archetypeI < archetypeCount; archetypeI++) {
+			deserializeVector<CompId>(des, comps); // although serialized as a set, sets and vectors follow the same encoding
+			deserializeEntityComponents(des, comps, callback);
+		}
+	}
+
+	void deserializeEntityComponents(Deserializer& des, const std::vector<CompId>& comps, const DesArchetypeCallback& callback) {
+		ListSize entityCount;
+		des.object(entityCount);
+
+		for (ListSize entityI = 0; entityI < entityCount; entityI++) {
+			EntityId rawId;
+			des.object(rawId);
+			flecs::entity entity = getEntityWorld().ensure(rawId);
+
+			assert(entity.id() != 0);
+
+			for (CompId compId : comps) {
+				callback(des, entity, compId);
+			}
+		}
+	}
+
+	void serializePhysicsMap(Serializer& ser, const Map<ShapeEnum, std::vector<PhysicsId>>& physicsMap, const std::function<void(Serializer&, ShapeEnum, PhysicsId)>& serFunc) {
+		assert(serFunc);
+		
+		ser.object(static_cast<ListSize>(physicsMap.size()));
+		for(auto& pair : physicsMap) {
+			ser.object(pair.first);
+
+			ser.object(static_cast<ListSize>(pair.second.size()));
+			for(PhysicsId id : pair.second) {
+				ser.object(id);
+
+				serFunc(ser, pair.first, id);
+			}
+		}
+	}
+
+	void deserializePhysicsMap(Deserializer& des, const DesPhysicsCallback& callback) {
+		ListSize enumCount;
+		des.object(enumCount);
+
+		for (ListSize enumI = 0; enumI < enumCount; enumI++) {
+			ShapeEnum shapeEnum;
+			des.object(shapeEnum);
+
+			ListSize idCount;
+			des.object(idCount);
+			for (ListSize idI = 0; idI < idCount; idI++) {
+				PhysicsId id;
+				des.object(id);
+
+				callback(des, shapeEnum, id);
+			}
+		}
+	}
+
+	template<typename MapType>
+	void serializeMap(Serializer& ser, const MapType& map) {
+		ser.object(static_cast<ListSize>(map.size()));
+		for (auto& pair : map) {
+			ser.object(pair.first);
+			ser.object(pair.second);
+		}
+	}
+
+	template<typename F, typename S>
+	void deserializeMap(Deserializer& des, const DesPairCallback<F, S>& callback) {
+		ListSize size;
+		des.object(size);
+		for (ListSize i = 0; i < size; i++) {
+			F first;
+			S second;
+			des.object(first);
+			des.object(second);
+			callback(first, second);
+		}
+	}
+
+	template<typename T>
+	void serializeSet(Serializer& ser, const std::set<T>& list) {
+		ser.object(static_cast<ListSize>(list.size()));
+		for (auto& value : list) {
+			ser.object(value);
+		}
+	}
+
+	template<typename T>
+	void deserializeSet(Deserializer& des, const DesElementCallback <T>& callback) {
+		ListSize size;
+		des.object(size);
+		for (ListSize i = 0; i < size; i++) {
+			T object;
+			des.object(object);
+			callback(object);
+		}
+	}
+
+	template<typename T>
+	void serializeVector(Serializer& ser, const std::vector<T>& list) {
+		ser.object(static_cast<ListSize>(list.size()));
+		for (auto& value : list) {
+			ser.object(value);
+		}
+	}
+
+	template<typename T>
+	void deserializeVector(Deserializer& des, const DesElementCallback<T>& callback) {
+		ListSize size;
+		des.object(size);
+		for (ListSize i = 0; i < size; i++) {
+			T object;
+			des.object(object);
+			callback(object);
+		}
+	}
+
+	template<typename T>
+	void deserializeVector(Deserializer& des, std::vector<T>& vector) {
+		ListSize size;
+		des.object(size);
+		vector.resize(size);
+		for (ListSize i = 0; i < size; i++) {
+			des.object(vector[i]);
+		}
 	}
 
 private:
-	void serializeReliableSnapshot() {
-		EntityWorldNetworkManager& worldManager = getEntityWorldNetworkManager();
-		PhysicsWorldNetworkManager& physicsManager = getPhysicsWorldNetworkManager();
+	struct ComponentInfo {
+		ComponentPiority piority;
+		std::function<void(Serializer& ser, const void* CompData)> ser;
+		std::function<void(Deserializer& ser, void* CompData)> des;
+	};
 
-		u8 snapshotFlags = 0;
-		if (hasStateChanged())
-			snapshotFlags |= impl::STATE_SERIALIZED;
-		if (physicsManager.isPhysicsWorldSnapshotReady())
-			snapshotFlags |= impl::PHYSICS_SERIALIZED;
-		if (worldManager.isEntityComponentMetaSnapshotReady())
-			snapshotFlags |= impl::META_SERIALIZED;
-		if (worldManager.isHighPiorityComponentSnapshotReady())
-			snapshotFlags |= impl::HIGH_PIORITY_SERIALIZED;
+	Map<CompId, ComponentInfo> registeredComponents;
 
-		reliableSnapshotser.object(snapshotFlags);
+	struct MetaDataSnapshot {
+		enum ActiveFlags : u8 {
+			NOT_SET = 0,
+			DO_ENABLE = 1 << 1,
+			DO_DISABLE = 1 << 2
+		};
+		
+		Set<EntityId> removeEntities;
+		Map<EntityId, u32> currentGens;
+		Map<EntityId, Set<CompId>> toRemove;
+		Map<EntityId, Set<CompId>> toAdd;
+		Map<EntityId, u8> toUpdateActive;
+	};
 
-		u32 snapshotSize = 0;
-		OutputAdapter& adapter = reliableSnapshotser.adapter();
-		u32 prevWritePos = adapter.currentWritePos();
-		reliableSnapshotser.object<u32>(0);
+	struct ComponentSnapshot {
+		Map<EntityId, Set<CompId>> toUpdate;
+	};
 
-		if (snapshotFlags & impl::STATE_SERIALIZED)
-			reliableSnapshotser.object(getCurrentStateId());
-		if (snapshotFlags & impl::PHYSICS_SERIALIZED)
-			physicsManager.serializePhysicsWorldSnapshot(reliableSnapshotser);
-		if (snapshotFlags & impl::META_SERIALIZED)
-			worldManager.serializeEntityComponentMetaSnapshot(reliableSnapshotser);
-		if (snapshotFlags & impl::HIGH_PIORITY_SERIALIZED)
-			worldManager.serializeHighPiorityComponentUpdates(reliableSnapshotser);
+	struct PhysicsSnapshot {
+		void checkForDirty() {
+			PhysicsWorld& physicsWorld = getPhysicsWorld();
 
-		u32 postWritePos = adapter.currentWritePos();
-		adapter.currentWritePos(prevWritePos);
-        snapshotSize = postWritePos - prevWritePos - sizeof(u32);
-		reliableSnapshotser.object(snapshotSize);
-		adapter.currentWritePos(postWritePos);
-	}
+			query.iter([&](flecs::iter& iter, ShapeComponent* shapesArray) {
+				for (auto i : iter) {
+					Shape& shape = physicsWorld.getShape(shapesArray[i].shape);
 
-	void serializeUnreliableSnapshot() {
-		EntityWorldNetworkManager& worldManager = getEntityWorldNetworkManager();
-
-		u8 snapshotFlags = 0;
-		if (worldManager.isLowPiorityComponentSnapshotReady())
-			snapshotFlags |= impl::LOW_PIORITY_SERIALIZED;
-
-		unreliableSnapshotser.object(snapshotFlags);
-
-		u32 snapshotSize = 0;
-		OutputAdapter& adapter = unreliableSnapshotser.adapter();
-		u32 prevWritePos = adapter.currentWritePos();
-		unreliableSnapshotser.object<u32>(0);
-
-		if (snapshotFlags != 0) {
-			worldManager.serializeLowPiorityComponentUpdates(unreliableSnapshotser);
+					if (shape.isNetworkDirty()) {
+						bodiesToUpdate[shape.getType()].push_back(shapesArray[i].shape);
+						shape.resetNetworkDirty();
+					}
+				}
+			});
 		}
 
-		u32 postWritePos = adapter.currentWritePos();
-		adapter.currentWritePos(prevWritePos);
-        snapshotSize = postWritePos - prevWritePos - sizeof(u32); // Don't include the size of SIZE
-		unreliableSnapshotser.object(snapshotSize);
-		adapter.currentWritePos(postWritePos);
-	}
-private:
-	bool compilationStarted = false;
+		Map<ShapeEnum, std::vector<PhysicsId>> bodiesToUpdate;
+		flecs::query<ShapeComponent> query;
+	};
 
-	// order of members matter here fyi
-	MessageBuffer reliableSnapshots;
-	MessageBuffer unreliableSnapshots;
-	Serializer reliableSnapshotser;
-	Serializer unreliableSnapshotser;
+	/*
+	 * Assuming the client's state is the same as the previous
+	 * server state (last tick), what is the minimal amount of
+	 * data that needs to be sent to get from Point A to Point B?
+	 *
+	 * Point A: the previous tick.
+	 * Point B: this tick.
+	 */
+	struct DeltaCompressedSnapshot {
+		void needUpdate(flecs::entity entity, CompId id, Map<CompId, ComponentInfo>& infos) {
+			tryIncreaseGen(entity);
+			componentData[(int)infos[id].piority].toUpdate[impl::cf<EntityId>(entity)].insert(id);
+		}
+
+		void needAdd(flecs::entity entity, CompId id) {
+			tryIncreaseGen(entity);
+			metaData.toAdd[impl::cf<EntityId>(entity)].insert(id);
+		}
+
+		void needRemove(flecs::entity entity, CompId id) {
+			tryIncreaseGen(entity);
+			metaData.toRemove[impl::cf<EntityId>(entity)].insert(id);
+		}
+
+		void needActive(flecs::entity entity, MetaDataSnapshot::ActiveFlags flags) {
+			tryIncreaseGen(entity);
+			metaData.toUpdateActive[impl::cf<EntityId>(entity)] = flags;
+		}
+
+		void tryIncreaseGen(flecs::entity entity) {
+			assert(entity.is_alive());
+
+			u32 idOnly = impl::cf<EntityId>(entity);
+			u32 newGen = ECS_GENERATION(entity.id());
+
+			if (metaData.currentGens.find(idOnly) == metaData.currentGens.end()) {
+				metaData.currentGens[idOnly] = newGen;
+				return;
+			}
+
+			if (metaData.currentGens[idOnly] != newGen) {
+				resetEntity(idOnly);
+				metaData.removeEntities.insert(idOnly);
+				metaData.currentGens[idOnly] = newGen;
+			}
+		}
+
+		void resetEntity(EntityId id) {
+			componentData[(int)ComponentPiority::High].toUpdate.erase(id);
+			componentData[(int)ComponentPiority::Low].toUpdate.erase(id);
+			metaData.toRemove.erase(id);
+			metaData.toAdd.erase(id);
+			metaData.toUpdateActive.erase(id);
+		}
+
+		void resetAll() {
+			metaData.removeEntities.clear();
+			metaData.currentGens.clear();
+			componentData[(int)ComponentPiority::High].toUpdate.clear();
+			componentData[(int)ComponentPiority::Low].toUpdate.clear();
+			metaData.toRemove.clear();
+			metaData.toAdd.clear();
+			metaData.toUpdateActive.clear();
+			physicsSnapshot.bodiesToUpdate[ShapeEnum::Circle].clear();
+			physicsSnapshot.bodiesToUpdate[ShapeEnum::Polygon].clear();
+		}
+
+		/* What data is inside this snapshot? */
+		u8 flags;
+
+		/* What state was active between server ticks? */
+		u64 state;
+
+		/* What entites or components were created, destroyed, enabled, or disabled between server ticks? .*/
+		MetaDataSnapshot metaData;
+
+		/* What shapes were created between server ticks? */
+		PhysicsSnapshot physicsSnapshot;
+
+		/* What was the data of the networked entities between server ticks? */
+		std::array<ComponentSnapshot, 2> componentData; // use the enum ComponentPiority
+	} deltaSnapshot;
+
+	/*
+	 * A serialized version of all networked entities and their components.
+	 * Everything is serialized.
+	 */
+	struct FullSnapshot {
+		void resetAll() {
+			tags.clear();
+			components.clear();
+			physicsSnapshot.bodiesToUpdate[ShapeEnum::Circle].clear();
+			physicsSnapshot.bodiesToUpdate[ShapeEnum::Polygon].clear();
+		}
+
+		Map<EntityId, Set<CompId>> tags;
+		Map<EntityId, Set<CompId>> components;
+		PhysicsSnapshot physicsSnapshot;
+	} fullSnapshot;
+
+	std::vector<flecs::entity> allObservers;
+	std::vector<flecs::entity> allSystems;
 };
-
-extern void enableSnapshots();
-extern NetworkSnapshotManager& getNetworkSnapshotManager();
-extern bool isSnapshotsEnabled();
 
 /* Default network interfaces */
 
@@ -1513,7 +1440,7 @@ extern bool isSnapshotsEnabled();
  */
 class ClientInterface : public NetworkInterface {
 public:
-    virtual ~ClientInterface() = default;
+	virtual ~ClientInterface() = default;
 
 	/* When an entity is by the client, it will start at this range.
 	   I.E. the default client range for created entites. */
@@ -1525,8 +1452,6 @@ public:
 
 		world.set_entity_range(defaultLocalEntityRange, UINT64_MAX);
 		world.enable_range_check(true);
-
-		getEntityWorldNetworkManager().disableAllSerialization();
 	}
 
 	/**
@@ -1548,13 +1473,6 @@ public:
 	 */
 	bool hasFailed() final {
 		return failed;
-	}
-
-	/**
-	 * @brief returns the currently processed server tick
-	 */
-	u32 getCurrentServerTick() const {
-		return currentServerTick;
 	}
 
 protected:
@@ -1602,23 +1520,12 @@ protected:
 
 	bool _internalOnMessageRecieved(HSteamNetConnection newConn, MessageHeader header, Deserializer& des) override {
 		switch (header) {
-		case MESSAGE_HEADER_SNAPSHOT_COMPILATION_RELIABLE: {
-			deserializeReliableSnapshotCompilation(des);
-		} break;
-
-		case MESSAGE_HEADER_SNAPSHOT_COMPILATION_UNRELIABLE: {
-			deserializeUnreliableSnapshotCompilation(des);
-		} break;
-
-		case MESSAGE_HEADER_SNAPSHOT_FULL: {
-			sentFullSnapshotRequest = false;
-			while (!snapshotsQueue.empty())
-				snapshotsQueue.pop();
-			snapshots.clear();
-
-			NetworkSnapshotManager::deserializeFullSnapshot(des);
-		} break;
-
+		case MESSAGE_HEADER_DELTA_SNAPSHOT:
+			getNetworkStateManager().updateWithDeltaSnapshot(des);
+			break;
+		case MESSAGE_HEADER_FULL_SNAPSHOT:
+			getNetworkStateManager().updateWithFullSnapshot(des);
+			break;
 		default:
 			return true;
 		}
@@ -1626,88 +1533,7 @@ protected:
 		return false;
 	}
 
-	void beginTick() override {
-		if(snapshots.size() > defaultMaxDsyncBeforeFullSnapshot && !sentFullSnapshotRequest) {
-			log(ERROR_SEVERITY_WARNING, "Possible dysnc, requesting full snapshot\n");
-			// We add a warning to the connection because if the D-sync is too large
-			// frequently, we should just give up on the connection
-			getNetworkManager().connectionAddWarning(conn);
-
-			MessageBuffer buffer;
-			Serializer ser = startSerialize(buffer);
-			ser.object(MESSAGE_HEADER_REQUEST_SNAPSHOT_FULL);
-			endSerialize(ser, buffer);
-	
-			getNetworkManager().sendMessage(0, std::move(buffer), true, true);
-
-			sentFullSnapshotRequest = true;
-		}
-
-		while(snapshotsQueue.size() > 1 && !sentFullSnapshotRequest) {
-			currentServerTick = snapshotsQueue.front();
-
-			Snapshot& snapshot = snapshots[currentServerTick];
-			NetworkSnapshotManager::updateAllWithSnapshotBuffer(snapshot.flags, snapshot.buffer);
-
-			snapshotsQueue.pop();
-			snapshots.erase(currentServerTick);
-		}
-	}
-
-	void endTick() override {
-	
-	}
-
-private:
-	void deserializeReliableSnapshotCompilation(Deserializer& des) {
-		u64 tickNum;
-		NetworkSnapshotManager::deserializeSnapshotCompilationHeader(des, tickNum);
-
-		for (; !des.adapter().isCompletedSuccessfully(); tickNum++) {
-			u8 snapshotFlags;
-			u32 snapshotSize = 0;
-			NetworkSnapshotManager::deserializeSnapshotHeader(des, snapshotFlags, snapshotSize);
-
-			snapshotsQueue.push(tickNum);
-			NetworkSnapshotManager::deserializeSnapshotBuffer(des, snapshotSize, snapshots[tickNum].buffer);
-			snapshots[tickNum].flags |= snapshotFlags;
-		}
-	}
-
-	void deserializeUnreliableSnapshotCompilation(Deserializer& des) {
-		u64 tickNum;
-		NetworkSnapshotManager::deserializeSnapshotCompilationHeader(des, tickNum);
-
-		for(; !des.adapter().isCompletedSuccessfully(); tickNum++) {
-			u8 snapshotFlags;
-			u32 snapshotSize = 0;
-			NetworkSnapshotManager::deserializeSnapshotHeader(des, snapshotFlags, snapshotSize);
-
-			// do not add the snapshot if the it is less then the current server tick.
-			// This means that the unreliable snapshot arrived too late and the 
-			// tick was already executed!
-			if(tickNum < currentServerTick || snapshots.find(tickNum) == snapshots.end()) {
-				des.adapter().currentReadPos(des.adapter().currentReadPos() + snapshotSize);
-				continue;
-			}
-
-			NetworkSnapshotManager::deserializeSnapshotBuffer(des, snapshotSize, snapshots[tickNum].buffer);
-			snapshots[tickNum].flags |= snapshotFlags;
-		}
-	}
-
-
 protected:
-	struct Snapshot {
-		u8 flags = 0;
-		MessageBuffer buffer;
-	};
-
-	std::map<u32, Snapshot> snapshots;
-	std::queue<u32> snapshotsQueue;
-	u32 currentServerTick = 0;
-
-	bool sentFullSnapshotRequest = false;
 	bool failed = false;
 	bool connected = false;
 	HSteamNetConnection conn = k_HSteamNetConnection_Invalid;
@@ -1727,34 +1553,24 @@ public:
 	ServerInterface() {
 		networkUpdate.setRate(20.0f);
 		networkUpdate.setFunction([&](float) { snapshotUpdate(); });
-		enableSnapshots();
 	}
 
-    virtual ~ServerInterface() = default;
+	virtual ~ServerInterface() = default;
 
 	/**
 	 * @brief Sends the snapshot compilation created within the
 	 * NetworkSnapshotManger and sends it to all clients.
 	 */
 	void snapshotUpdate() {
-		assert(isSnapshotsEnabled());
-		NetworkSnapshotManager& snapshotManager = getNetworkSnapshotManager();
+		NetworkStateManager& stateManager = getNetworkStateManager();
 		NetworkManager& networkManager = getNetworkManager();
-
-		if(!snapshotManager.hasSnapshotCompilationStarted()) {
-			snapshotManager.beginSnapshotCompilation();
-			return;
-		}
-
-		snapshotManager.endSnapshotCompilation();
-
-		MessageBuffer& reliableSnapshots = snapshotManager.getReliableSnapshotCompilation();
-		MessageBuffer& unreliableSnapshots = snapshotManager.getUnreliableSnapshotCompilation();
-
-		networkManager.sendMessage(0, std::move(reliableSnapshots), true, true);
-		networkManager.sendMessage(0, std::move(unreliableSnapshots), true, false);
-
-		snapshotManager.beginSnapshotCompilation();
+		MessageBuffer reliableSnapshot;
+		MessageBuffer unreliableSnapshot;
+	
+		stateManager.createDeltaSnapshot(reliableSnapshot, unreliableSnapshot);
+	
+		networkManager.sendMessage(0, std::move(reliableSnapshot), true, true);
+		networkManager.sendMessage(0, std::move(unreliableSnapshot), true, true);
 	}
 
 	/**
@@ -1766,15 +1582,14 @@ public:
 	 * @param who the client/connection to send the update to
 	 */
 	void fullSyncUpdate(HSteamNetConnection who) {
-		NetworkSnapshotManager& networkSnapshotManager = getNetworkSnapshotManager();
+		MessageBuffer fullsnapshot;
 
-		MessageBuffer buffer;
-		networkSnapshotManager.serializeFullSnapshot(buffer);
+		getNetworkStateManager().createFullSnapshot(fullsnapshot);
 
 		if(who)
-			getNetworkManager().sendMessage(who, std::move(buffer), false, true);
+			getNetworkManager().sendMessage(who, std::move(fullsnapshot), false, true);
 		else
-			getNetworkManager().sendMessage(who, std::move(buffer), true, true);
+			getNetworkManager().sendMessage(0, std::move(fullsnapshot), true, true);
 	}
 
 	/**
@@ -1809,13 +1624,6 @@ public:
 		return listen == k_HSteamListenSocket_Invalid;
 	}
 protected:
-	void beginTick() override {
-	}
-
-	void endTick() override {
-		getNetworkSnapshotManager().updateNetworkChanges();
-	}
-
 	bool open(const SteamNetworkingIPAddr& addr, const SteamNetworkingConfigValue_t& opt) override {
 		if(listen != k_HSteamListenSocket_Invalid)
 			return false;
@@ -1843,7 +1651,7 @@ protected:
 
 	bool _internalOnMessageRecieved(HSteamNetConnection conn, MessageHeader header, Deserializer& des) override {
 		switch(header) {
-		case MESSAGE_HEADER_REQUEST_SNAPSHOT_FULL:
+		case MESSAGE_HEADER_REQUEST_FULL_SNAPSHOT:
 			fullSyncUpdate(conn);
 			break;
 

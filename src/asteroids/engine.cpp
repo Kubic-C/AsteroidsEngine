@@ -12,17 +12,15 @@ struct Engine {
 	// ORDERED BY INITIALIZATION, DO NOT CHANGE THE ORDER- thank you
 
 	std::shared_ptr<PhysicsWorld> physicsWorld;
-	std::shared_ptr<PhysicsWorldNetworkManager> physicsWorldNetwork;
 	flecs::world entityWorld;
 	ISteamNetworkingSockets* sockets;
 	ISteamNetworkingUtils* util;
 	std::shared_ptr<NetworkManager> networkManager;
-	std::shared_ptr<EntityWorldNetworkManager> entityWorldNetwork;
+	std::shared_ptr<NetworkStateManager> networkStateManager;
 	Ticker<void(float)> ticker;
 	std::function<void()> updateCallback;
 	std::shared_ptr<sf::RenderWindow> window;
 	std::shared_ptr<tgui::Gui> gui;
-	std::shared_ptr<NetworkSnapshotManager> networkSnaphots;
 	std::unordered_map<u64, StateInfo> states;
 	u64 activeState;
 	u64 nextActiveState;
@@ -167,7 +165,7 @@ void init() {
 	engine->sockets = SteamNetworkingSockets();
 	engine->util = SteamNetworkingUtils();
 	engine->networkManager = std::make_shared<NetworkManager>();
-	engine->entityWorldNetwork = std::make_shared<EntityWorldNetworkManager>();
+	engine->networkStateManager = std::make_shared<NetworkStateManager>();
 	CoreModule::registerCore();
 
 	// For testing the network :)
@@ -211,7 +209,6 @@ void init() {
 	
 	// Physics
 	engine->physicsWorld = std::make_shared<PhysicsWorld>();
-	engine->physicsWorldNetwork = std::make_shared<PhysicsWorldNetworkManager>();
 
 	// Core
 	engine->entityWorld.import<CoreModule>();
@@ -236,16 +233,12 @@ flecs::world& getEntityWorld() {
 	return engine->entityWorld;
 }
 
-EntityWorldNetworkManager& getEntityWorldNetworkManager() {
-	return *engine->entityWorldNetwork;
-}
-
 PhysicsWorld& getPhysicsWorld() {
 	return *engine->physicsWorld;
 }
 
-PhysicsWorldNetworkManager& getPhysicsWorldNetworkManager() {
-	return *engine->physicsWorldNetwork;
+NetworkStateManager& getNetworkStateManager() {
+	return *engine->networkStateManager;
 }
 
 Gui& getGui() {
@@ -281,25 +274,6 @@ void setWindow(std::shared_ptr<sf::RenderWindow> window) {
 
 sf::RenderWindow& getWindow() {
 	return *engine->window;
-}
-
-void enableSnapshots() {
-	assert(!engine->networkSnaphots);
-
-	engine->networkSnaphots = std::make_shared<NetworkSnapshotManager>();
-}
-
-void disableSnapshots() {
-	engine->networkSnaphots = nullptr;
-}
-
-NetworkSnapshotManager& getNetworkSnapshotManager() {
-	assert(engine->networkSnaphots && "Must have snapshots enabled");
-	return *engine->networkSnaphots;
-}
-
-bool isSnapshotsEnabled() {
-	return engine->networkSnaphots != nullptr;
 }
 
 void setFps(u32 fps) {
