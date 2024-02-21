@@ -690,7 +690,7 @@ public:
 				deltaSnapshot.metaData.removeEntities.insert(impl::cf<EntityId>(e));
 			});
 
-		allObservers.push_back(addObserver);
+		allDeltaSnapshotSystems.push_back(addObserver);
 
 		flecs::entity getAllBodiesSystem = world.system<ShapeComponent>().kind<NoPhase>().each([this](ShapeComponent& shapeId){
 			if(!shapeId.isValid())
@@ -700,19 +700,20 @@ public:
 			fullSnapshot.physicsSnapshot.bodiesToUpdate[shape.getType()].push_back(shapeId.shape);
 		});
 
-		allSystems.push_back(getAllBodiesSystem);
+		fullSnapshotSystems.push_back(getAllBodiesSystem);
+	}
 
-		deltaSnapshot.physicsSnapshot.query = world.query<ShapeComponent>();
+	// lets us know that the user state has changed
+	void userStateChanged() {
+		deltaSnapshot.state = getCurrentStateId();
 	}
 
 	~NetworkStateManager() {
-		deltaSnapshot.physicsSnapshot.query.destruct();
-
-		for(flecs::entity observer : allObservers) {
+		for(flecs::entity observer : allDeltaSnapshotSystems) {
 			observer.destruct();
 		}
 
-		for (flecs::entity system : allSystems) {
+		for (flecs::entity system : fullSnapshotSystems) {
 			system.destruct();
 		}
 	}
@@ -784,8 +785,8 @@ public:
 			deltaSnapshot.needRemove(entity, id);
 		});
 
-		allObservers.push_back(addObserver);
-		allObservers.push_back(removeObserver);
+		allDeltaSnapshotSystems.push_back(addObserver);
+		allDeltaSnapshotSystems.push_back(removeObserver);
 	}
 
 private:
@@ -800,7 +801,7 @@ private:
 			fullSnapshot.tags[impl::cf<EntityId>(entity)].insert(id);
 		});
 
-		allSystems.push_back(fullsnapshotTagAdd);
+		fullSnapshotSystems.push_back(fullsnapshotTagAdd);
 	}
 
 	template<typename ComponentType>
@@ -825,14 +826,14 @@ private:
 			deltaSnapshot.needUpdate(entity, id, registeredComponents);
 		});
 
-		allObservers.push_back(addObserver);
-		allObservers.push_back(setObserver);
+		allDeltaSnapshotSystems.push_back(addObserver);
+		allDeltaSnapshotSystems.push_back(setObserver);
 
 		flecs::entity fullsnapshotComponentAdd = entityWorld.system().term<ComponentType>().kind<NoPhase>().each([this, id](flecs::entity entity) {
 			fullSnapshot.components[impl::cf<EntityId>(entity)].insert(id);
 		});
 
-		allSystems.push_back(fullsnapshotComponentAdd);
+		fullSnapshotSystems.push_back(fullsnapshotComponentAdd);
 	}
 
 public:
@@ -843,78 +844,91 @@ public:
 	 * heavily impact the client when recieved.
 	 */
 	void createDeltaSnapshot(MessageBuffer& reliableBuffer, MessageBuffer& unreliableBuffer) {
+		/* RELIABLE MESSAGE */
+		deltaSnapshot.checkForDirtyShapes();
+
+		deltaSnapshot.flags = 0;
+		if(deltaSnapshot.state != 0)
+			deltaSnapshot.flags |= impl::STATE;
+		if(deltaSnapshot.metaData.canSerialize())
+			deltaSnapshot.flags |= impl::META_DATA_SNAPSHOT;
+		if(deltaSnapshot.physicsSnapshot.canSerialize())
+			deltaSnapshot.flags |= impl::PHYSICS_SNAPSHOT;
+		if(deltaSnapshot.componentData[(int)ComponentPiority::High].canSerialize())
+			deltaSnapshot.flags |= impl::COMPONENT_UPDATE_SNAPSHOT;
+
 		Serializer ser = startSerialize(reliableBuffer);
-
-		deltaSnapshot.flags = impl::STATE | impl::META_DATA_SNAPSHOT | impl::PHYSICS_SNAPSHOT | impl::COMPONENT_UPDATE_SNAPSHOT;
-
-		deltaSnapshot.physicsSnapshot.checkForDirty();
-
 		// HEADER
 		ser.object(MESSAGE_HEADER_DELTA_SNAPSHOT);
 		ser.object(deltaSnapshot.flags);
-
 		// State
-		ser.object(getCurrentStateId());
-
+		if(deltaSnapshot.flags & impl::STATE) {
+			ser.object(getCurrentStateId());
+			deltaSnapshot.state = 0;
+		}
 		// Meta Data
-		MetaDataSnapshot& metaData = deltaSnapshot.metaData;
-		serializeSet(ser, metaData.removeEntities);
-		sortByArchetypes(metaData.toAdd);
-		serializeArchetypes(ser, cache.archetypeMap, nullptr);
-		sortByArchetypes(metaData.toRemove);
-		serializeArchetypes(ser, cache.archetypeMap, nullptr);
-		serializeMap(ser, metaData.toUpdateActive);
-
+		if(deltaSnapshot.flags & impl::META_DATA_SNAPSHOT) {
+			MetaDataSnapshot& metaData = deltaSnapshot.metaData;
+			serializeSet(ser, metaData.removeEntities);
+			sortByArchetypes(metaData.toAdd);
+			serializeArchetypes(ser, cache.archetypeMap, nullptr);
+			sortByArchetypes(metaData.toRemove);
+			serializeArchetypes(ser, cache.archetypeMap, nullptr);
+			serializeMap(ser, metaData.toUpdateActive);
+		}
 		// Physics Data
-		auto& physicsWorld = getPhysicsWorld();
-		PhysicsSnapshot& physicsData = deltaSnapshot.physicsSnapshot;
-		serializePhysicsMap(ser, physicsData.bodiesToUpdate, [&](Serializer& ser, ShapeEnum shapeEnum, PhysicsId id){
-			switch(shapeEnum) {
-			case ShapeEnum::Circle:
-				ser.object(physicsWorld.getCircle((u32)id));
-				break;
-			case ShapeEnum::Polygon:
-				ser.object(physicsWorld.getPolygon((u32)id));
-				break;
+		if(deltaSnapshot.flags & impl::PHYSICS_SNAPSHOT) {
+			auto& physicsWorld = getPhysicsWorld();
+			PhysicsSnapshot& physicsData = deltaSnapshot.physicsSnapshot;
+			serializePhysicsMap(ser, physicsData.bodiesToUpdate, [&](Serializer& ser, ShapeEnum shapeEnum, PhysicsId id) {
+				switch (shapeEnum) {
+				case ShapeEnum::Circle:
+					ser.object(physicsWorld.getCircle((u32)id));
+					break;
+				case ShapeEnum::Polygon:
+					ser.object(physicsWorld.getPolygon((u32)id));
+					break;
 
-			default:
-				assert(!"Invalid shape enum");
-				break;
-			}
-		});
-
+				default:
+					assert(!"Invalid shape enum");
+					break;
+				}
+			});
+		}
 		// High Piortiy Component Updates
-		sortByArchetypes(deltaSnapshot.componentData[(int)ComponentPiority::High].toUpdate);
-		serializeArchetypes(ser, cache.archetypeMap, [&](Serializer& ser, EntityId entityId, CompId compId){
-			flecs::entity entity = impl::af(entityId);
+		if(deltaSnapshot.flags & impl::COMPONENT_UPDATE_SNAPSHOT) {
+			sortByArchetypes(deltaSnapshot.componentData[(int)ComponentPiority::High].toUpdate);
+			serializeArchetypes(ser, cache.archetypeMap, [&](Serializer& ser, EntityId entityId, CompId compId){
+				flecs::entity entity = impl::af(entityId);
 
-			assert(entity.is_alive());
+				assert(entity.is_alive());
 
-			registeredComponents[compId].ser(ser, entity.get(compId));
-		});
-
+				registeredComponents[compId].ser(ser, entity.get(compId));
+			});
+		}
 		endSerialize(ser, reliableBuffer);
 
 		/* UNRELIABLE MESSAGE */
-
-		deltaSnapshot.flags = impl::COMPONENT_UPDATE_SNAPSHOT | impl::LOW_PIORITY;
+		deltaSnapshot.flags = impl::LOW_PIORITY;
+		if(deltaSnapshot.componentData[(int)ComponentPiority::Low].canSerialize())
+			deltaSnapshot.flags |= impl::COMPONENT_UPDATE_SNAPSHOT;
 
 		ser = startSerialize(unreliableBuffer);
-
 		// Header
 		ser.object(MESSAGE_HEADER_DELTA_SNAPSHOT);
 		ser.object(deltaSnapshot.flags);
-
 		// Low Piortiy Component Updates
-		sortByArchetypes(deltaSnapshot.componentData[(int)ComponentPiority::Low].toUpdate);
-		serializeArchetypes(ser, cache.archetypeMap, [&](Serializer& ser, EntityId entityId, CompId compId) {
-			flecs::entity entity = impl::af(entityId);
+		if(deltaSnapshot.flags & impl::COMPONENT_UPDATE_SNAPSHOT) {
+			sortByArchetypes(deltaSnapshot.componentData[(int)ComponentPiority::Low].toUpdate);
+			serializeArchetypes(ser, cache.archetypeMap, [&](Serializer& ser, EntityId entityId, CompId compId) {
+				flecs::entity entity = impl::af(entityId);
 
-			registeredComponents[compId].ser(ser, entity.get(compId));
-		});
-
+				registeredComponents[compId].ser(ser, entity.get(compId));
+			});
+		}
 		endSerialize(ser, unreliableBuffer);
 
+		// cleanup ...
 		deltaSnapshot.resetAll();
 	}
 
@@ -1012,12 +1026,13 @@ public:
 		auto& world = getEntityWorld();
 		auto& physicsWorld = getPhysicsWorld();
 
-		for(auto system : allSystems) {
+		for(auto system : fullSnapshotSystems) {
 			world.system(system).run(0.0f);
 		}
 
 		Serializer ser = startSerialize(buffer);
 		ser.object(MESSAGE_HEADER_FULL_SNAPSHOT);
+		ser.object(getCurrentStateId());
 		sortByArchetypes(fullSnapshot.tags);
 		serializeArchetypes(ser, cache.archetypeMap, nullptr);
 		sortByArchetypes(fullSnapshot.components);
@@ -1057,6 +1072,10 @@ public:
 		entityWorld.enable_range_check(false);
 
 		entityWorld.delete_with<NetworkedEntity>();
+
+		u64 stateId;
+		des.object(stateId);
+		transitionState(stateId, true);
 
 		deserializeArchetypes(des, [](Deserializer& des, flecs::entity entity, CompId compId) {
 			entity.add(compId);
@@ -1104,17 +1123,7 @@ private: /* Cache things */
 		// components to update, allowing for smaller message size.
 		Map<std::set<CompId>, std::vector<EntityId>> archetypeMap;
 	} cache;
-private:
-	template<typename T>
-	using DesElementCallback = std::function<void(T)>;
-
-	template<typename F, typename S> // F = first, S = second
-	using DesPairCallback = std::function<void(F, S)>;
-
-	using DesPhysicsCallback = std::function<void(Deserializer& des, ShapeEnum, PhysicsId id)>;
-
-	using DesArchetypeCallback = std::function<void(Deserializer& des, flecs::entity, CompId)>;
-
+private: // Serialization and deserialization helper functions.
 	Map<std::set<CompId>, std::vector<EntityId>>& sortByArchetypes(const Map<EntityId, Set<CompId>>& entityMap) {
 		cache.archetypeMap.clear();
 
@@ -1145,7 +1154,7 @@ private:
 		}
 	}
 
-	void deserializeArchetypes(Deserializer& des, const DesArchetypeCallback& callback) {
+	void deserializeArchetypes(Deserializer& des, const std::function<void(Deserializer& des, flecs::entity, CompId)>& callback) {
 		ListSize archetypeCount;
 		des.object(archetypeCount);
 
@@ -1156,7 +1165,7 @@ private:
 		}
 	}
 
-	void deserializeEntityComponents(Deserializer& des, const std::vector<CompId>& comps, const DesArchetypeCallback& callback) {
+	void deserializeEntityComponents(Deserializer& des, const std::vector<CompId>& comps, const std::function<void(Deserializer& des, flecs::entity, CompId)>& callback) {
 		ListSize entityCount;
 		des.object(entityCount);
 
@@ -1189,7 +1198,7 @@ private:
 		}
 	}
 
-	void deserializePhysicsMap(Deserializer& des, const DesPhysicsCallback& callback) {
+	void deserializePhysicsMap(Deserializer& des, const std::function<void(Deserializer& des, ShapeEnum, PhysicsId id)>& callback) {
 		ListSize enumCount;
 		des.object(enumCount);
 
@@ -1218,7 +1227,7 @@ private:
 	}
 
 	template<typename F, typename S>
-	void deserializeMap(Deserializer& des, const DesPairCallback<F, S>& callback) {
+	void deserializeMap(Deserializer& des, const std::function<void(F, S)>& callback) {
 		ListSize size;
 		des.object(size);
 		for (ListSize i = 0; i < size; i++) {
@@ -1239,7 +1248,7 @@ private:
 	}
 
 	template<typename T>
-	void deserializeSet(Deserializer& des, const DesElementCallback <T>& callback) {
+	void deserializeSet(Deserializer& des, const std::function<void(T)>& callback) {
 		ListSize size;
 		des.object(size);
 		for (ListSize i = 0; i < size; i++) {
@@ -1258,7 +1267,7 @@ private:
 	}
 
 	template<typename T>
-	void deserializeVector(Deserializer& des, const DesElementCallback<T>& callback) {
+	void deserializeVector(Deserializer& des, const std::function<void(T)>& callback) {
 		ListSize size;
 		des.object(size);
 		for (ListSize i = 0; i < size; i++) {
@@ -1294,6 +1303,13 @@ private:
 			DO_DISABLE = 1 << 2
 		};
 		
+		bool canSerialize() {
+			return !removeEntities.empty() ||
+				   !toRemove.empty() ||
+				   !toAdd.empty() ||
+				   !toUpdateActive.empty();
+		}
+
 		Set<EntityId> removeEntities;
 		Map<EntityId, u32> currentGens;
 		Map<EntityId, Set<CompId>> toRemove;
@@ -1302,27 +1318,19 @@ private:
 	};
 
 	struct ComponentSnapshot {
+		bool canSerialize() {
+			return !toUpdate.empty();
+		}
+
 		Map<EntityId, Set<CompId>> toUpdate;
 	};
 
 	struct PhysicsSnapshot {
-		void checkForDirty() {
-			PhysicsWorld& physicsWorld = getPhysicsWorld();
-
-			query.iter([&](flecs::iter& iter, ShapeComponent* shapesArray) {
-				for (auto i : iter) {
-					Shape& shape = physicsWorld.getShape(shapesArray[i].shape);
-
-					if (shape.isNetworkDirty()) {
-						bodiesToUpdate[shape.getType()].push_back(shapesArray[i].shape);
-						shape.resetNetworkDirty();
-					}
-				}
-			});
+		bool canSerialize() {
+			return !bodiesToUpdate.empty();
 		}
 
 		Map<ShapeEnum, std::vector<PhysicsId>> bodiesToUpdate;
-		flecs::query<ShapeComponent> query;
 	};
 
 	/*
@@ -1334,6 +1342,29 @@ private:
 	 * Point B: this tick.
 	 */
 	struct DeltaCompressedSnapshot {
+		DeltaCompressedSnapshot() {
+			shapeCompQuery = getEntityWorld().query<ShapeComponent>();
+		}
+
+		~DeltaCompressedSnapshot() {
+			shapeCompQuery.destruct();
+		}
+
+		void checkForDirtyShapes() {
+			PhysicsWorld& physicsWorld = getPhysicsWorld();
+
+			shapeCompQuery.iter([&](flecs::iter& iter, ShapeComponent* shapesArray) {
+				for (auto i : iter) {
+					Shape& shape = physicsWorld.getShape(shapesArray[i].shape);
+
+					if (shape.isNetworkDirty()) {
+						physicsSnapshot.bodiesToUpdate[shape.getType()].push_back(shapesArray[i].shape);
+						shape.resetNetworkDirty();
+					}
+				}
+			});
+		}
+
 		void needUpdate(flecs::entity entity, CompId id, Map<CompId, ComponentInfo>& infos) {
 			tryIncreaseGen(entity);
 			componentData[(int)infos[id].piority].toUpdate[impl::cf<EntityId>(entity)].insert(id);
@@ -1406,6 +1437,9 @@ private:
 
 		/* What was the data of the networked entities between server ticks? */
 		std::array<ComponentSnapshot, 2> componentData; // use the enum ComponentPiority
+
+		// Used to check if shape's are dirty.
+		flecs::query<ShapeComponent> shapeCompQuery;
 	} deltaSnapshot;
 
 	/*
@@ -1425,8 +1459,8 @@ private:
 		PhysicsSnapshot physicsSnapshot;
 	} fullSnapshot;
 
-	std::vector<flecs::entity> allObservers;
-	std::vector<flecs::entity> allSystems;
+	std::vector<flecs::entity> allDeltaSnapshotSystems;
+	std::vector<flecs::entity> fullSnapshotSystems;
 };
 
 /* Default network interfaces */
