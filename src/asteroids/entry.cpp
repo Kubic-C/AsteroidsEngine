@@ -1,5 +1,4 @@
 #include "entry.hpp"
-#include <stacktrace>
 
 #undef main
 

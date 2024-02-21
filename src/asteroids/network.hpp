@@ -1303,7 +1303,7 @@ private:
 			DO_DISABLE = 1 << 2
 		};
 		
-		bool canSerialize() {
+		bool canSerialize() const {
 			return !removeEntities.empty() ||
 				   !toRemove.empty() ||
 				   !toAdd.empty() ||
@@ -1318,7 +1318,7 @@ private:
 	};
 
 	struct ComponentSnapshot {
-		bool canSerialize() {
+		bool canSerialize() const {
 			return !toUpdate.empty();
 		}
 
@@ -1326,7 +1326,7 @@ private:
 	};
 
 	struct PhysicsSnapshot {
-		bool canSerialize() {
+		bool canSerialize() const {
 			return !bodiesToUpdate.empty();
 		}
 
