@@ -2,6 +2,11 @@
 
 AE_NAMESPACE_BEGIN
 
+u64 generateNewStateId() {
+	static u64 counter = 1;
+	return ++counter;
+}
+
 struct StateInfo {
 	std::shared_ptr<State> state = nullptr;
 	std::unordered_map<std::type_index, flecs::entity> networkModules;
@@ -21,7 +26,8 @@ struct Engine {
 	std::function<void()> updateCallback;
 	std::shared_ptr<sf::RenderWindow> window;
 	std::shared_ptr<tgui::Gui> gui;
-	std::unordered_map<u64, StateInfo> states;
+	impl::FastMap<u64, u64> stateIdTranslationTable; // this used to transform a State type hash code into a controllable unique type ID
+	impl::FastMap<u64, StateInfo> states;
 	u64 activeState;
 	u64 nextActiveState;
 	u64 lastState; // the state in the last tick
@@ -31,6 +37,10 @@ struct Engine {
 Engine* engine = nullptr; 
 
 namespace impl {
+	bool validStateTypeId(u64 hashCode) {
+		return engine->stateIdTranslationTable.find(hashCode) != engine->stateIdTranslationTable.end();
+	}
+
 	bool validState(u64 id) {
 		return engine->states.find(id) != engine->states.end();
 	}
@@ -43,12 +53,13 @@ namespace impl {
 		if(typeId.hash_code() > UINT64_MAX)
 			log(ERROR_SEVERITY_FATAL, "Hashcode of state surpassed max u64\n");
 
-		if(validState((u64)typeId.hash_code()))
+		if(validStateTypeId((u64)typeId.hash_code()))
 			log(ERROR_SEVERITY_FATAL, "State already registered: %s: %llu\n", typeId.name(), (u64)typeId.hash_code());
 
-		engine->states[(u64)typeId.hash_code()].state = std::move(ptr);
+		engine->stateIdTranslationTable[(u64)typeId.hash_code()] = generateNewStateId();
+		engine->states[engine->stateIdTranslationTable[(u64)typeId.hash_code()]].state = std::move(ptr);
 
-		return (u64)typeId.hash_code();
+		return engine->stateIdTranslationTable[(u64)typeId.hash_code()];
 	}
 
 	void _registerNetworkStateModule(flecs::entity module, std::type_index networkInterfaceId, u64 stateId) {
@@ -103,6 +114,10 @@ namespace impl {
 	
 	ISteamNetworkingSockets* getSockets() {
 		return engine->sockets;
+	}
+
+	impl::FastMap<u64, u64>& getStateIdTranslationTable() {
+		return engine->stateIdTranslationTable;
 	}
 
 	void update() {

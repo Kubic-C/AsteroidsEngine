@@ -14,6 +14,8 @@ namespace impl {
 	void _registerNetworkStateModule(flecs::entity module, std::type_index networkInterfaceId, u64 stateId);
 
 	float getTickRate();
+
+	impl::FastMap<u64, u64>& getStateIdTranslationTable();
 }
 
 void init();
@@ -38,7 +40,7 @@ u64 registerState() {
 
 template<typename T>
 u64 getStateId() {
-	return (u64)std::type_index(typeid(T)).hash_code();
+	return impl::getStateIdTranslationTable()[(u64)std::type_index(typeid(T)).hash_code()];
 }
 
 State& getCurrentState();

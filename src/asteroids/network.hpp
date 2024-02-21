@@ -768,8 +768,6 @@ public:
 		flecs::entity component = entityWorld.component<ComponentType>();
 		CompId id = impl::cf<CompId>(component); 
 
-		ae::log("%s - %u\n", typeid(ComponentType).name(), (u32)id);
-
 		ComponentInfo& info = registeredComponents[id];
 
 		info.piority = piority;
