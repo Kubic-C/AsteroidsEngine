@@ -1116,7 +1116,7 @@ private: /* Cache things */
 	using Set = std::set<T>;
 
 	template<typename K, typename T>
-	using Map = std::map<K, T>;
+	using Map = boost::container::flat_map<K, T>;
 
 	struct Cache {
 		// used when reversing maps. Helps sort entities by
