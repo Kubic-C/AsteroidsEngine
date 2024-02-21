@@ -89,10 +89,6 @@ namespace impl {
 				nextState.networkModules[id].enable();
 			}
 
-			// Some interface network code such as sync updates may need to know if state has changed
-			interface._internalUpdate();
-			interface.update();
-
 			engine->networkStateManager->userStateChanged();
 		}
 	}

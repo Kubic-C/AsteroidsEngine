@@ -1604,7 +1604,7 @@ public:
 		stateManager.createDeltaSnapshot(reliableSnapshot, unreliableSnapshot);
 	
 		networkManager.sendMessage(0, std::move(reliableSnapshot), true, true);
-		networkManager.sendMessage(0, std::move(unreliableSnapshot), true, true);
+		networkManager.sendMessage(0, std::move(unreliableSnapshot), true, false);
 	}
 
 	/**
