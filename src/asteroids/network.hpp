@@ -797,7 +797,7 @@ private:
 		info.ser = nullptr;
 		info.des = nullptr;
 
-		flecs::entity fullsnapshotTagAdd = getEntityWorld().system().term<TagType>().kind<NoPhase>().each([this, id](flecs::entity entity) {
+		flecs::entity fullsnapshotTagAdd = getEntityWorld().system().term<TagType>().template kind<NoPhase>().each([this, id](flecs::entity entity) {
 			fullSnapshot.tags[impl::cf<EntityId>(entity)].insert(id);
 		});
 
@@ -829,7 +829,7 @@ private:
 		allDeltaSnapshotSystems.push_back(addObserver);
 		allDeltaSnapshotSystems.push_back(setObserver);
 
-		flecs::entity fullsnapshotComponentAdd = entityWorld.system().term<ComponentType>().kind<NoPhase>().each([this, id](flecs::entity entity) {
+		flecs::entity fullsnapshotComponentAdd = entityWorld.system().term<ComponentType>().template kind<NoPhase>().each([this, id](flecs::entity entity) {
 			fullSnapshot.components[impl::cf<EntityId>(entity)].insert(id);
 		});
 

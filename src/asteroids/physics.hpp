@@ -94,7 +94,7 @@ public:
 	}
 
 	Shape(sf::Vector2f pos, float rot)
-		: pos(pos), rot(rot) {
+		: rot(rot), pos(pos){
 		markFullDirty();
 	}
 
@@ -153,7 +153,7 @@ public:
 	Circle(sf::Vector2f pos, float rot, float radius = 0.0f)
 		: Shape(pos, rot), radius(radius) {}
 
-    NODISCARD virtual ShapeEnum getType() const { return ShapeEnum::Circle; }
+    NODISCARD virtual ShapeEnum getType() const override { return ShapeEnum::Circle; }
 
     NODISCARD float getRadius() const override { return radius; }
 
@@ -198,7 +198,7 @@ public:
 
 	NODISCARD virtual sf::Vector2f getCentroid() const override { return centroid; }
 
-    NODISCARD virtual ShapeEnum getType() const { return ShapeEnum::Polygon; }
+    NODISCARD virtual ShapeEnum getType() const override { return ShapeEnum::Polygon; }
 
     NODISCARD float getRadius() const override { return radius; }
 
@@ -248,14 +248,14 @@ public:
 		if (localFlags[LOCAL_DIRTY])
 			computeWorldVertices();
 
-		return IndirectContainer<sf::Vector2f>(verticesCount, cache.vertices.data());
+		return {verticesCount, cache.vertices.data()};
 	}
 
     NODISCARD vertices_t getWorldNormals() {
 		if (localFlags[LOCAL_DIRTY])
 			computeWorldVertices();
 
-		return IndirectContainer<sf::Vector2f>(verticesCount, cache.normals.data());
+		return {verticesCount, cache.normals.data()};
 	}
 
 	template<typename S>
@@ -336,12 +336,12 @@ protected:
 		std::array<sf::Vector2f, 8> normals;
 	} cache;
 private:
-	float radius;
-
 	sf::Vector2f centroid;
 	u8 verticesCount;
 	std::array<sf::Vector2f, 8> vertices;
 	std::array<sf::Vector2f, 8> normals;
+
+    float radius;
 };
 
 
