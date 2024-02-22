@@ -33,7 +33,7 @@ struct Engine {
 	impl::FastMap<u64, u64> stateIdTranslationTable; // this used to transform a State type hash code into a controllable unique type ID
 	impl::FastMap<u64, StateInfo> states;
 	u64 activeState;
-	u64 nextActiveState;
+	std::queue<u64> nextActiveState;
 	u64 lastState; // the state in the last tick
 	u64 currentTick;
 };
@@ -73,13 +73,13 @@ namespace impl {
 		engine->states[stateId].networkModules[networkInterfaceId] = module;
 	}
 
-	void transitionState(u64 stateId) {
+	void transitionState(u64 stateId, bool force) {
 		if (!impl::validState(stateId)) {
 			log(ERROR_SEVERITY_WARNING, "Attempted to transition to a invalid state: %u\n", stateId);
 			return;
 		}
 
-		if (stateId == engine->activeState)
+		if (stateId == engine->activeState && !force)
 			return;
 
 		StateInfo& prevState = engine->states[engine->activeState];
@@ -91,15 +91,16 @@ namespace impl {
 		nextState.state->onEntry();
 		nextState.state->getModule().enable();
 
+		for(auto pair : prevState.networkModules) {
+			pair.second.disable(); // disable all network modules
+		}
+
 		// enable NetworkStateModules
 		NetworkManager& networkManager = *engine->networkManager;
 		if (networkManager.hasNetworkInterface()) {
 			NetworkInterface& interface = networkManager.getNetworkInterface();
 			auto id = std::type_index(typeid(interface));
 
-			if (prevState.networkModules.find(id) != prevState.networkModules.end()) {
-				prevState.networkModules[id].disable();
-			}
 			if (nextState.networkModules.find(id) != nextState.networkModules.end()) {
 				nextState.networkModules[id].enable();
 			}
@@ -158,9 +159,9 @@ namespace impl {
 		engine->currentTick++;
 		engine->lastState = engine->activeState;
 
-		if(engine->nextActiveState != UINT64_MAX) {
-			::ae::impl::transitionState(engine->nextActiveState);
-			engine->nextActiveState = UINT64_MAX;
+		if(!engine->nextActiveState.empty()) {
+			::ae::impl::transitionState(engine->nextActiveState.front(), false);
+			engine->nextActiveState.pop();
 		}
 	}
 }
@@ -303,13 +304,13 @@ u64 getCurrentStateId() {
 	return engine->activeState;
 }
 
-void transitionState(u64 id, bool immediate) {
+void transitionState(u64 id, bool immediate, bool force) {
 	if(immediate && !getEntityWorld().is_deferred()) {
-		impl::transitionState(id);
+		impl::transitionState(id, force);
 		return;
 	}
 
-	engine->nextActiveState = id;
+	engine->nextActiveState.push(id);
 }
 
 bool hasStateChanged() {

@@ -79,11 +79,11 @@ void registerNetworkInterfaceStateModule() {
 	impl::_registerNetworkStateModule(module, std::type_index(typeid(NetworkInterfaceType)), getStateId<StateType>());
 }
 
-void transitionState(u64 stateId, bool immediate = false);
+void transitionState(u64 stateId, bool immediate = false, bool force = false);
 
 template<typename T>
-void transitionState(bool immediate = false) {
-	transitionState(getStateId<T>(), immediate);
+void transitionState(bool immediate = false, bool force = false) {
+	transitionState(getStateId<T>(), immediate, force);
 }
 
 bool hasStateChanged();

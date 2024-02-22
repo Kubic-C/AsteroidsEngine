@@ -332,6 +332,9 @@ public:
 	}
 
 	void setNetworkInterface(std::shared_ptr<NetworkInterface> newInterface) {
+		if(networkInterface)
+			close();
+
 		networkInterface = std::move(newInterface);
 	}
 
@@ -492,9 +495,10 @@ public:
 	}
 
 	void close() {
-		for(auto& pair: connections) {
-			networkInterface->closeConnection(pair.first);
-		}
+		while(!connections.empty()) {
+			auto it = connections.begin();
+			onConnectionLeave(it->first); // onConnectionLeave will erase the connection
+		} 
 
 		networkInterface->close();
 	}
@@ -641,7 +645,7 @@ struct ShapeComponent : public NetworkedComponent {
 
 extern u64 getCurrentTick();
 extern u64 getCurrentStateId();
-extern void transitionState(u64 id, bool immediate);
+extern void transitionState(u64 id, bool immediate, bool force);
 
 namespace impl {
 	enum SnapshotFlags : u8 {
@@ -1469,8 +1473,6 @@ private:
  */
 class ClientInterface : public NetworkInterface {
 public:
-	virtual ~ClientInterface() = default;
-
 	/* When an entity is by the client, it will start at this range.
 	   I.E. the default client range for created entites. */
 	static constexpr u64 defaultLocalEntityRange = 1000000;
@@ -1481,6 +1483,13 @@ public:
 
 		world.set_entity_range(defaultLocalEntityRange, UINT64_MAX);
 		world.enable_range_check(true);
+	}
+
+	virtual ~ClientInterface() {
+		flecs::world& world = getEntityWorld();
+
+		world.set_entity_range(0, defaultLocalEntityRange);
+		world.enable_range_check(false);
 	}
 
 	/**
