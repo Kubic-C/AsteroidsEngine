@@ -1,8 +1,10 @@
 #pragma once
 
+#include "logging.hpp"
+#include "physics.hpp"
 #include "time.hpp"
-#include "core.hpp"
 #include "state.hpp"
+#include "config.hpp"
 
 AE_NAMESPACE_BEGIN
 
@@ -15,10 +17,24 @@ namespace impl {
 
 	float getTickRate();
 
-	impl::FastMap<u64, u64>& getStateIdTranslationTable();
+	FastMap<u64, u64>& getStateIdTranslationTable();
 }
 
 void init();
+
+Config& getConfig();
+
+template<typename T>
+T& getConfigValue(const std::string& name) {
+	if(!getConfig().contains(name))
+		log(ERROR_SEVERITY_FATAL, "Config: %s does not exist\n", name.c_str());
+
+	return getConfig().at(name).get_ref<T>();
+}
+
+// whenever applyConfig() is called, this will be called as well
+void setConfigApplyCallback(std::function<void(Config& config)> callback);
+void applyConfig(Config&& newConfig = readConfig());
 
 u64 getCurrentTick();
 

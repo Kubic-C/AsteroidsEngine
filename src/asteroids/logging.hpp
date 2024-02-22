@@ -83,7 +83,15 @@ public:
 		decoratorMap[DECORATOR_WHITE]  = ANSI_WHITE;
 		decoratorMap[DECORATOR_RESET]  = ANSI_RESET;
 
-		logFile.open(std::string("log") + std::to_string(time(nullptr)) + ".txt");
+		if(!std::filesystem::exists("logs"))
+			std::filesystem::create_directory("logs");
+
+		auto t = std::time(nullptr);
+		auto tm = *std::localtime(&t);
+		std::stringstream ss;
+		ss << std::put_time(&tm, "%d_%m_%Y %H_%M_%S");
+
+		logFile.open(std::string("logs/log") + " " + ss.str() + ".txt");
 	}
 
 	~Logger() {

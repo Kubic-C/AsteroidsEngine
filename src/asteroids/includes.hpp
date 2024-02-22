@@ -13,6 +13,14 @@
 // Boost
 #include <boost/container/flat_map.hpp>
 
+// Really wanted to use this but it prints out CONFIGS
+// in scientific notation.. :( It needs to be user friendly
+// 
+// #include <boost/json.hpp>
+#include <nlohmann/json.hpp>
+
+using json = nlohmann::json;
+
 // Networking
 #include <steam/isteamnetworkingsockets.h>
 #include <steam/isteamnetworkingmessages.h>
@@ -66,6 +74,11 @@ typedef int64_t  i64;
 #define AE_NAMESPACE_END }
 
 AE_NAMESPACE_BEGIN
+
+namespace impl {
+	template<typename K, typename T>
+	using FastMap = boost::container::flat_map<K, T>;
+}
 
 template<typename T>
 class IndirectContainer {

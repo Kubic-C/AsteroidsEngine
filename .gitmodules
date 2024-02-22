@@ -16,3 +16,6 @@
 [submodule "deps/TGUI"]
 	path = deps/TGUI
 	url = https://github.com/texus/TGUI
+[submodule "deps/json"]
+	path = deps/json
+	url = https://github.com/nlohmann/json

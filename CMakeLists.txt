@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION "3.12")
+cmake_minimum_required(VERSION "3.21")
 project(AsteroidsEngine)
 
 set(BUILD_SHARED_LIBS true)

@@ -651,9 +651,6 @@ namespace impl {
 		COMPONENT_UPDATE_SNAPSHOT = 1 << 3,
 		LOW_PIORITY = 1 << 4 // Does this snapshot contain low piority data?
 	};
-
-	template<typename K, typename T>
-	using FastMap = boost::container::flat_map<K, T>;
 }
 
 template<typename S>

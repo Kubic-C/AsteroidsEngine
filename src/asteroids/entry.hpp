@@ -1,5 +1,4 @@
 #pragma once
-#include "logging.hpp"
 #include "engine.hpp"
 
 extern int EntryPoint(int argc, char* argv[]);

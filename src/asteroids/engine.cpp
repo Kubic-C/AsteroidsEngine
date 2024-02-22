@@ -1,4 +1,6 @@
 #include "engine.hpp"
+#include "core.hpp"
+#include "network.hpp"
 
 AE_NAMESPACE_BEGIN
 
@@ -16,6 +18,8 @@ struct StateInfo {
 struct Engine {
 	// ORDERED BY INITIALIZATION, DO NOT CHANGE THE ORDER- thank you
 
+	std::function<void(Config& config)> applyConfigCallback;
+	Config config;
 	std::shared_ptr<PhysicsWorld> physicsWorld;
 	flecs::world entityWorld;
 	ISteamNetworkingSockets* sockets;
@@ -170,7 +174,16 @@ void init() {
 		log(ERROR_SEVERITY_FATAL, "Engine already initialized\n");
 
 	engine = new Engine();
-	
+
+	// Read in configs
+	Config inConfig = readConfig();
+	if(inConfig.empty()) {
+		writeConfig(Config());
+	}
+
+	inConfig = readConfig();
+	engine->applyConfigCallback = nullptr;
+
 	// Networking
 	SteamNetworkingErrMsg steamNetworkingErrMsg;
 	if(!GameNetworkingSockets_Init(nullptr, steamNetworkingErrMsg))
@@ -232,6 +245,30 @@ void init() {
 
 	// Ticking
 	engine->currentTick = 0;
+
+	// And set the config
+	applyConfig(std::move(inConfig));
+}
+
+Config& getConfig() {
+	return engine->config;
+}
+
+void setConfigApplyCallback(std::function<void(Config& config)> callback) {
+	engine->applyConfigCallback = callback;
+}
+
+void applyConfig(Config&& newConfig) {
+	assert(!newConfig.empty());
+
+	setFps(newConfig.value(CFG_FPS, 60));
+	setTps(newConfig.value(CFG_TPS, 60.0));
+	getWindow().setVerticalSyncEnabled(newConfig.value(CFG_VSYNC_ON, true));
+
+	if(engine->applyConfigCallback)
+		engine->applyConfigCallback(newConfig);
+
+	engine->config = std::move(newConfig);
 }
 
 u64 getCurrentTick() {
@@ -309,6 +346,8 @@ void mainLoop() {
 }
 
 void free() {
+	writeConfig(engine->config);
+
 	if(!engine)
 		log(ERROR_SEVERITY_FATAL, "Engine has not been initialized\n");
 
