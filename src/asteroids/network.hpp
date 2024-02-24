@@ -789,7 +789,6 @@ public:
 		flecs::entity addObserver = 
 			entityWorld.observer()
 			.term<ComponentType>()
-			.with<NetworkedEntity>()
 			.event(flecs::OnAdd)
 			.each([this, id](flecs::entity entity){
 				deltaSnapshot.needAdd(entity, id);
@@ -798,7 +797,6 @@ public:
 		flecs::entity removeObserver = 
 			entityWorld.observer()
 			.term<ComponentType>()
-			.with<NetworkedEntity>()
 			.event(flecs::OnRemove)
 			.each([this, id](flecs::entity entity) {
 				deltaSnapshot.needRemove(entity, id);
@@ -820,7 +818,6 @@ private:
 			getEntityWorld()
 			.system()
 			.term<TagType>()
-			.with<NetworkedEntity>()
 			.template kind<NoPhase>()
 			.each([this, id](flecs::entity entity) {
 				fullSnapshot.tags[impl::cf<EntityId>(entity)].insert(id);
@@ -847,7 +844,6 @@ private:
 		flecs::entity addObserver = 
 			entityWorld.observer()
 			.term<ComponentType>()
-			.with<NetworkedEntity>()
 			.event(flecs::OnAdd)
 			.each([this, id](flecs::entity entity) {
 				deltaSnapshot.needUpdate(entity, id, registeredComponents);
@@ -855,8 +851,6 @@ private:
 		flecs::entity setObserver =
 			entityWorld.observer()
 			.term<ComponentType>()
-			.with<NetworkedEntity>()
-			.without(flecs::IsA)
 			.event(flecs::OnSet)
 			.each([this, id](flecs::entity entity) {
 				deltaSnapshot.needUpdate(entity, id, registeredComponents);
@@ -1532,7 +1526,10 @@ public:
 	virtual ~ClientInterface() {
 		flecs::world& world = getEntityWorld();
 
-		world.set_entity_range(0, defaultLocalEntityRange);
+		// this is broken for some reason, i've asked on how to
+		// reset starting ID but no one has responded ;(
+		// https://discord.com/channels/633826290415435777/1210120089517563914/1210120089517563914
+		//world.set_entity_range(0, defaultLocalEntityRange);
 		world.enable_range_check(false);
 	}
 
