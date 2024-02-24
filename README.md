@@ -22,3 +22,5 @@ There are many libraries that the asteroids engine uses:
   * SFML: Audio, Window, Rendering handling
   * TGUI: GUI handling
   * THST: Spatial partitioning library
+  * nlohman/json: For config reading and writing
+  * boost: various utility functions
