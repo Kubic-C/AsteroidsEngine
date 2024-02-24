@@ -40,4 +40,19 @@ inline Config readConfig(const std::string& path = "config.json") {
 	return config;
 }
 
+// dvalue means Default Value. If config does contain 
+// key, it will add that key along with its default value;
+// if it does exist, it will return that existing value.
+// This is different from Config::value as ae::dvalue() modifies
+// the config object and Config::value does not.
+template<typename T>
+T&& dvalue(Config& config, const char* key, T&& value) {
+	if(config.contains(key))
+		return config.value(key, value);
+	else {
+		config.emplace(key, value);
+		return config.value(key, value);
+	}
+}
+
 AE_NAMESPACE_END

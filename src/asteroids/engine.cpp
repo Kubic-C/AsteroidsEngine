@@ -179,7 +179,7 @@ void init() {
 	// Read in configs
 	Config inConfig = readConfig();
 	if(inConfig.empty()) {
-		writeConfig(Config());
+		writeConfig(json::object());
 	}
 
 	inConfig = readConfig();
@@ -248,7 +248,7 @@ void init() {
 	engine->currentTick = 0;
 
 	// And set the config
-	applyConfig(std::move(inConfig));
+	applyConfig(inConfig);
 }
 
 Config& getConfig() {
@@ -259,12 +259,10 @@ void setConfigApplyCallback(std::function<void(Config& config)> callback) {
 	engine->applyConfigCallback = callback;
 }
 
-void applyConfig(Config&& newConfig) {
-	assert(!newConfig.empty());
-
-	setFps(newConfig.value(CFG_FPS, 60));
-	setTps(newConfig.value(CFG_TPS, 60.0));
-	getWindow().setVerticalSyncEnabled(newConfig.value(CFG_VSYNC_ON, true));
+void applyConfig(Config newConfig) {
+	setFps((u32)dvalue<i64>(newConfig, CFG_FPS, 60));
+	setTps((float)dvalue<double>(newConfig, CFG_TPS, 60.0));
+	getWindow().setVerticalSyncEnabled(dvalue<bool>(newConfig, CFG_VSYNC_ON, true));
 
 	if(engine->applyConfigCallback)
 		engine->applyConfigCallback(newConfig);

@@ -34,7 +34,7 @@ T& getConfigValue(const std::string& name) {
 
 // whenever applyConfig() is called, this will be called as well
 void setConfigApplyCallback(std::function<void(Config& config)> callback);
-void applyConfig(Config&& newConfig = readConfig());
+void applyConfig(Config newConfig = readConfig());
 
 u64 getCurrentTick();
 

@@ -676,6 +676,10 @@ class NetworkStateManager {
 	using CompId = u32;
 	using EntityId = u32;
 	using PhysicsId = u32;
+	template<typename T>
+	using Set = std::set<T>;
+	template<typename K, typename T>
+	using Map = std::map<K, T>;
 
 public:
 	NetworkStateManager() {
@@ -684,22 +688,28 @@ public:
 		registerComponent<NetworkedEntity>();
 		world.add<NetworkedEntity>();
 
-		flecs::entity addObserver = world.observer()
+		flecs::entity removeObserver = world.observer()
 			.term<NetworkedEntity>()
-			.event(flecs::OnRemove).each([this](flecs::entity e) {
+			.event(flecs::OnRemove)
+			.each([this](flecs::entity e) {
 				deltaSnapshot.resetEntity(impl::cf<EntityId>(e));
 				deltaSnapshot.metaData.removeEntities.insert(impl::cf<EntityId>(e));
+				deltaSnapshot.metaData.currentGens[e].second = true;
 			});
 
-		allDeltaSnapshotSystems.push_back(addObserver);
+		allDeltaSnapshotSystems.push_back(removeObserver);
 
-		flecs::entity getAllBodiesSystem = world.system<ShapeComponent>().kind<NoPhase>().each([this](ShapeComponent& shapeId){
-			if(!shapeId.isValid())
-				return;
+		flecs::entity getAllBodiesSystem = 
+			world.system<ShapeComponent>()
+			.kind<NoPhase>()
+			.with<NetworkedEntity>()
+			.each([this](ShapeComponent& shapeId){
+				if(!shapeId.isValid())
+					return;
 
-			Shape& shape = getPhysicsWorld().getShape(shapeId.shape);
-			fullSnapshot.physicsSnapshot.bodiesToUpdate[shape.getType()].push_back(shapeId.shape);
-		});
+				Shape& shape = getPhysicsWorld().getShape(shapeId.shape);
+				fullSnapshot.physicsSnapshot.bodiesToUpdate[shape.getType()].push_back(shapeId.shape);
+			});
 
 		fullSnapshotSystems.push_back(getAllBodiesSystem);
 	}
@@ -776,13 +786,23 @@ public:
 		registerComponentInfo<ComponentType>(id, piority, std::is_empty<ComponentType>());
 
 		// Adding and Destroying component type 
-		flecs::entity addObserver = entityWorld.observer().term<ComponentType>().event(flecs::OnAdd).each([this, id](flecs::entity entity){
-			deltaSnapshot.needAdd(entity, id);
-		});
+		flecs::entity addObserver = 
+			entityWorld.observer()
+			.term<ComponentType>()
+			.with<NetworkedEntity>()
+			.event(flecs::OnAdd)
+			.each([this, id](flecs::entity entity){
+				deltaSnapshot.needAdd(entity, id);
+			});
 
-		flecs::entity removeObserver = entityWorld.observer().term<ComponentType>().event(flecs::OnRemove).each([this, id](flecs::entity entity) {
-			deltaSnapshot.needRemove(entity, id);
-		});
+		flecs::entity removeObserver = 
+			entityWorld.observer()
+			.term<ComponentType>()
+			.with<NetworkedEntity>()
+			.event(flecs::OnRemove)
+			.each([this, id](flecs::entity entity) {
+				deltaSnapshot.needRemove(entity, id);
+			});
 
 		allDeltaSnapshotSystems.push_back(addObserver);
 		allDeltaSnapshotSystems.push_back(removeObserver);
@@ -796,9 +816,15 @@ private:
 		info.ser = nullptr;
 		info.des = nullptr;
 
-		flecs::entity fullsnapshotTagAdd = getEntityWorld().system().term<TagType>().template kind<NoPhase>().each([this, id](flecs::entity entity) {
-			fullSnapshot.tags[impl::cf<EntityId>(entity)].insert(id);
-		});
+		flecs::entity fullsnapshotTagAdd = 
+			getEntityWorld()
+			.system()
+			.term<TagType>()
+			.with<NetworkedEntity>()
+			.template kind<NoPhase>()
+			.each([this, id](flecs::entity entity) {
+				fullSnapshot.tags[impl::cf<EntityId>(entity)].insert(id);
+			});
 
 		fullSnapshotSystems.push_back(fullsnapshotTagAdd);
 	}
@@ -818,19 +844,36 @@ private:
 				des.object((ComponentType&)*(ComponentType*)data);
 			};
 
-		flecs::entity addObserver = entityWorld.observer().term<ComponentType>().event(flecs::OnAdd).each([this, id](flecs::entity entity) {
-			deltaSnapshot.needUpdate(entity, id, registeredComponents);
-		});
-		flecs::entity setObserver = entityWorld.observer().term<ComponentType>().event(flecs::OnSet).each([this, id](flecs::entity entity) {
-			deltaSnapshot.needUpdate(entity, id, registeredComponents);
-		});
+		flecs::entity addObserver = 
+			entityWorld.observer()
+			.term<ComponentType>()
+			.with<NetworkedEntity>()
+			.event(flecs::OnAdd)
+			.each([this, id](flecs::entity entity) {
+				deltaSnapshot.needUpdate(entity, id, registeredComponents);
+			});
+		flecs::entity setObserver =
+			entityWorld.observer()
+			.term<ComponentType>()
+			.with<NetworkedEntity>()
+			.without(flecs::IsA)
+			.event(flecs::OnSet)
+			.each([this, id](flecs::entity entity) {
+				deltaSnapshot.needUpdate(entity, id, registeredComponents);
+			});
 
 		allDeltaSnapshotSystems.push_back(addObserver);
 		allDeltaSnapshotSystems.push_back(setObserver);
 
-		flecs::entity fullsnapshotComponentAdd = entityWorld.system().term<ComponentType>().template kind<NoPhase>().each([this, id](flecs::entity entity) {
-			fullSnapshot.components[impl::cf<EntityId>(entity)].insert(id);
-		});
+		flecs::entity fullsnapshotComponentAdd = 
+			entityWorld.system()
+			.term<ComponentType>()
+			.with<NetworkedEntity>()
+			.without(flecs::Prefab)
+			.template kind<NoPhase>()
+			.each([this, id](flecs::entity entity) {
+				fullSnapshot.components[impl::cf<EntityId>(entity)].insert(id);
+			});
 
 		fullSnapshotSystems.push_back(fullsnapshotComponentAdd);
 	}
@@ -899,8 +942,6 @@ public:
 			sortByArchetypes(deltaSnapshot.componentData[(int)ComponentPiority::High].toUpdate);
 			serializeArchetypes(ser, cache.archetypeMap, [&](Serializer& ser, EntityId entityId, CompId compId){
 				flecs::entity entity = impl::af(entityId);
-
-				assert(entity.is_alive());
 
 				registeredComponents[compId].ser(ser, entity.get(compId));
 			});
@@ -1111,12 +1152,6 @@ public:
 	}
 
 private: /* Cache things */
-	template<typename T>
-	using Set = std::set<T>;
-
-	template<typename K, typename T>
-	using Map = boost::container::flat_map<K, T>;
-
 	struct Cache {
 		// used when reversing maps. Helps sort entities by
 		// components to update, allowing for smaller message size.
@@ -1310,7 +1345,7 @@ private:
 		}
 
 		Set<EntityId> removeEntities;
-		Map<EntityId, u32> currentGens;
+		Map<EntityId, std::pair<u32, bool>> currentGens;
 		Map<EntityId, Set<CompId>> toRemove;
 		Map<EntityId, Set<CompId>> toAdd;
 		Map<EntityId, u8> toUpdateActive;
@@ -1366,6 +1401,13 @@ private:
 
 		void needUpdate(flecs::entity entity, CompId id, Map<CompId, ComponentInfo>& infos) {
 			tryIncreaseGen(entity);
+
+			// is the entity currently destroyed?
+			// When an entity is destroyed and utilizes prefabs
+			// OnSet is called on whatever component is overriden and removed
+			if(metaData.currentGens[entity].second)
+				return;
+
 			componentData[(int)infos[id].piority].toUpdate[impl::cf<EntityId>(entity)].insert(id);
 		}
 
@@ -1391,14 +1433,16 @@ private:
 			u32 newGen = ECS_GENERATION(entity.id());
 
 			if (metaData.currentGens.find(idOnly) == metaData.currentGens.end()) {
-				metaData.currentGens[idOnly] = newGen;
+				metaData.currentGens[idOnly].first = newGen;
+				metaData.currentGens[idOnly].second = false;
 				return;
 			}
 
-			if (metaData.currentGens[idOnly] != newGen) {
+			if (metaData.currentGens[idOnly].first != newGen) {
 				resetEntity(idOnly);
 				metaData.removeEntities.insert(idOnly);
-				metaData.currentGens[idOnly] = newGen;
+				metaData.currentGens[idOnly].first = newGen;
+				metaData.currentGens[idOnly].second = false;
 			}
 		}
 
@@ -1411,8 +1455,8 @@ private:
 		}
 
 		void resetAll() {
-			metaData.removeEntities.clear();
 			metaData.currentGens.clear();
+			metaData.removeEntities.clear();
 			componentData[(int)ComponentPiority::High].toUpdate.clear();
 			componentData[(int)ComponentPiority::Low].toUpdate.clear();
 			metaData.toRemove.clear();

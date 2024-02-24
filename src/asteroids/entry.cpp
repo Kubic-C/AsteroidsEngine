@@ -12,12 +12,15 @@ int main(int argc, char* argv[]) {
 		returnCode = EntryPoint(argc, argv);
 
 		ae::free();
-	}
-	catch (ae::EngineError& error) {
+	} catch (ae::EngineError& error) {
 		(void)error;
-		ae::log(ae::ERROR_SEVERITY_WARNING, "Engine Error Occurred; Terminating");
+		ae::log(ae::ERROR_SEVERITY_WARNING, "Engine Error Occurred; Terminating\n");
 		returnCode = -1;
-	} 
+	} catch (std::exception& error) {
+		ae::log(ae::ERROR_SEVERITY_WARNING, "Error Occurred; Terminating. %s\n", error.what());
+		returnCode = -1;
+	}
+
 
 	return returnCode;
 }

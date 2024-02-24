@@ -6,6 +6,10 @@ AE_NAMESPACE_BEGIN
 
 struct TransformComponent : public NetworkedComponent {
 public:
+    TransformComponent() = default;
+    explicit TransformComponent(const sf::Vector2f& newPos)
+        : pos(newPos) {}
+
     NODISCARD sf::Vector2f getUnweightedPos() const { return pos; }
     NODISCARD sf::Vector2f getPos() const { return pos + origin; }
     void setPos(sf::Vector2f newPos) {

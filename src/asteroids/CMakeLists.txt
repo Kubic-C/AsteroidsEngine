@@ -28,7 +28,7 @@ target_link_libraries(AsteroidsEngine PUBLIC
 	sfml-system
 	sfml-graphics
     sfml-audio
-    flecs_static
+    flecs
 	THST
 	tgui
     nlohmann_json::nlohmann_json)
