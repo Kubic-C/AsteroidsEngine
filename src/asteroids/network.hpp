@@ -251,14 +251,6 @@ namespace impl {
 	extern float getTickRate();
 
 	struct MessageBufferMeta {
-		MessageBufferMeta() {
-			ae::log("Create meta: %p\n", this);			
-		}
-
-		~MessageBufferMeta() {
-			ae::log("Destroy meta: %p\n", this);			
-		}
-		
 		u32 messagesSent = 0;
 		u32 messagesFreed = 0;
 	};
@@ -423,7 +415,6 @@ public:
 				message.m_pfnFreeData = 
 					[](ISteamNetworkingMessage* message){
 						auto meta = (impl::MessageBufferMeta*)message->m_nUserData;
-						ae::log("Destroying stuff\n");
 
 						meta->messagesFreed++;
 						if(meta->messagesFreed == meta->messagesSent) {
