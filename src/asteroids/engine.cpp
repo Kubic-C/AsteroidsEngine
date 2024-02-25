@@ -330,6 +330,9 @@ void setFps(u32 fps) {
 }
 
 void setTps(float tps) {
+	if(tps == 0.0f)
+		ae::log(ERROR_SEVERITY_FATAL, "Attempt to set TPS to 0.0f\n");
+
 	engine->ticker.setRate(tps);
 }
 

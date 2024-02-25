@@ -21,6 +21,5 @@ int main(int argc, char* argv[]) {
 		returnCode = -1;
 	}
 
-
 	return returnCode;
 }

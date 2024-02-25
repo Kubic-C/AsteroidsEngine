@@ -89,12 +89,12 @@ void serialize(S& s, ShapeEnum& e) {
 class Shape {
 public:
 	Shape()
-		: rot(0.0f), pos(0.0f, 0.0f) {
+		: rot(0.0f), pos(0.0f, 0.0f), collisionMask(0) {
 		markFullDirty();
 	}
 
 	Shape(sf::Vector2f pos, float rot)
-		: rot(rot), pos(pos){
+		: rot(rot), pos(pos), collisionMask(0) {
 		markFullDirty();
 	}
 
@@ -119,10 +119,14 @@ public:
 
 	void markLocalDirty() { localFlags[LOCAL_DIRTY] = true; }
 
+	NODISCARD u16 getCollisionMask() const { return collisionMask; }
+	void setCollisonMask(u16 newMask) { collisionMask = newMask; }
+
 	template<typename S>
 	void serialize(S& s) {
 		s.value4b(rot);
 		s.object(pos);
+		s.value2b(collisionMask);
 	}
 protected:
 	virtual void Update() {}
@@ -140,6 +144,7 @@ protected:
 	std::bitset<8> localFlags;
 	float rot;
 	sf::Vector2f pos;
+	u16 collisionMask;
 };
 
 class Circle : public Shape {
@@ -512,6 +517,7 @@ inline bool testCollision(Polygon& Polygon, Circle& Circle, CollisionManifold& m
 struct SpatialIndexElement : AABB {
 	u32 shapeId;
 	u32 entityId;
+	u16 collisionMask;
 
 	bool operator==(const SpatialIndexElement& other) {
 		return shapeId == other.shapeId;
@@ -587,12 +593,13 @@ public:
 	}
 
 	/* Inserts a shape into the spatial tree allowing for collision detection */
-	void insertShapeIntoTree(u32 id, flecs::entity flecsId) {
+	void insertShapeIntoTree(u32 id, flecs::entity flecsId, u16 mask) {
 		Shape& shape = getShape(id);
 
 		SpatialIndexElement element;
 		element.entityId = impl::cf<u32>(flecsId);
 		element.shapeId = id;
+		element.collisionMask = mask;
 		AABB aabb = shape.getAABB();
 		element.min = aabb.min;
 		element.max = aabb.max;
@@ -614,7 +621,7 @@ private:
 
 private:
 	SpatialIndexTree rtree;
-	boost::container::flat_map<u32, std::variant<Circle, Polygon>> shapes;
+	impl::FastMap<u32, std::variant<Circle, Polygon>> shapes;
 	u32 idCounter = 0;
 };
 

@@ -46,7 +46,7 @@ inline Config readConfig(const std::string& path = "config.json") {
 // This is different from Config::value as ae::dvalue() modifies
 // the config object and Config::value does not.
 template<typename T>
-T&& dvalue(Config& config, const char* key, T&& value) {
+T dvalue(Config& config, const char* key, T&& value) {
 	if(config.contains(key))
 		return config.value(key, value);
 	else {

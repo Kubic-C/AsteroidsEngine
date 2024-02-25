@@ -29,7 +29,7 @@ T& getConfigValue(const std::string& name) {
 	if(!getConfig().contains(name))
 		log(ERROR_SEVERITY_FATAL, "Config: %s does not exist\n", name.c_str());
 
-	return getConfig().at(name).get_ref<T>();
+	return getConfig().at(name).get_ref<T&>();
 }
 
 // whenever applyConfig() is called, this will be called as well

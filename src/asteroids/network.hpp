@@ -679,7 +679,7 @@ class NetworkStateManager {
 	template<typename T>
 	using Set = std::set<T>;
 	template<typename K, typename T>
-	using Map = std::map<K, T>;
+	using Map = impl::FastMap<K, T>;
 
 public:
 	NetworkStateManager() {

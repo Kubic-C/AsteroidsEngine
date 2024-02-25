@@ -136,7 +136,7 @@ namespace impl {
             shape.setPos(transform.getUnweightedPos());
             shape.setRot(transform.getRot());
 
-            world.insertShapeIntoTree(shapeId, iter.entity(i));
+            world.insertShapeIntoTree(shapeId, iter.entity(i), shape.getCollisionMask());
         }
     }
 
@@ -194,6 +194,9 @@ namespace impl {
 
             for (SpatialIndexElement& element : physicsEcsCache.results) {
                 if (element.shapeId == shapeId)
+                    continue;
+
+                if ((shape.getCollisionMask() & element.collisionMask) > 0)
                     continue;
 
                 Shape& foundShape = world.getShape(element.shapeId);
