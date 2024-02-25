@@ -251,6 +251,14 @@ namespace impl {
 	extern float getTickRate();
 
 	struct MessageBufferMeta {
+		MessageBufferMeta() {
+			ae::log("Create meta: %p\n", this);			
+		}
+
+		~MessageBufferMeta() {
+			ae::log("Destroy meta: %p\n", this);			
+		}
+		
 		u32 messagesSent = 0;
 		u32 messagesFreed = 0;
 	};
@@ -398,7 +406,6 @@ public:
 			// ---
 			// that the former is much faster.
 			auto meta = new impl::MessageBufferMeta;
-			messageBuffer.setOwner(false);
 
 			for (auto& pair : connections) {
 				if (pair.first == who)
@@ -416,6 +423,7 @@ public:
 				message.m_pfnFreeData = 
 					[](ISteamNetworkingMessage* message){
 						auto meta = (impl::MessageBufferMeta*)message->m_nUserData;
+						ae::log("Destroying stuff\n");
 
 						meta->messagesFreed++;
 						if(meta->messagesFreed == meta->messagesSent) {
@@ -427,12 +435,15 @@ public:
 				meta->messagesSent++;
 			}
 
-			if(networkingMessages.empty())
+			if(networkingMessages.empty()) {
+				delete meta;
 				return;
+			}
 
 			std::vector<int64_t> results;
 			results.resize(networkingMessages.size());
 
+			messageBuffer.setOwner(false);
 			impl::getSockets()->SendMessages((int)networkingMessages.size(), networkingMessages.data(), (int64*)results.data());
 			networkingMessages.clear();
 		
@@ -862,7 +873,7 @@ private:
 		flecs::entity fullsnapshotComponentAdd = 
 			entityWorld.system()
 			.term<ComponentType>()
-			.with<NetworkedEntity>()
+			.template with<NetworkedEntity>()
 			.without(flecs::Prefab)
 			.template kind<NoPhase>()
 			.each([this, id](flecs::entity entity) {
