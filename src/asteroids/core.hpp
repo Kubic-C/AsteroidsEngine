@@ -50,6 +50,11 @@ struct IntegratableComponent : public NetworkedComponent {
 public:
     NODISCARD sf::Vector2f getLinearVelocity() const { return linearVelocity; }
 
+    void setLinearVelocity(sf::Vector2f newVelocity) {
+        setLast();
+        linearVelocity = newVelocity; 
+    }
+
     void addLinearVelocity(sf::Vector2f vel) {
         setLast();
         linearVelocity += vel;
