@@ -52,7 +52,7 @@ vcpkg directory itself. The variable value field should look something like this
 Finally, in between where you call cmake_minimum_required() and your project(), insert this:
 ```
 if(WIN32)
-    message("Using the VCPKG Toolchain for Windows");
-    set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}")
+    message("Using the VCPKG Toolchain for Windows")
+    set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake")
 endif()
 ```
