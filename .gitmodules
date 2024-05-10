@@ -1,9 +1,6 @@
 [submodule "deps/bitsery"]
 	path = deps/bitsery
 	url = https://github.com/fraillt/bitsery
-[submodule "deps/GameNetworkingSockets"]
-	path = deps/GameNetworkingSockets
-	url = https://github.com/ValveSoftware/GameNetworkingSockets
 [submodule "deps/SFML"]
 	path = deps/SFML
 	url = https://github.com/SFML/SFML

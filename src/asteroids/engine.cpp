@@ -127,14 +127,9 @@ namespace impl {
 
 	void update() {
 		sf::Event event;
-		while(engine->window->pollEvent(event)) {
-			switch(event.type) {
-            case sf::Event::Closed:
-				engine->entityWorld.quit();
-				break;
-			default:
-				break;
-			}
+		while(event = engine->window->pollEvent()) {
+            if(event.is<sf::Event::Closed>())
+                engine->entityWorld.quit();
 
 			engine->gui->handleEvent(event);
 		}

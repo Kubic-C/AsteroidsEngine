@@ -1,12 +1,11 @@
-cmake_minimum_required(VERSION "3.21")
+cmake_minimum_required(VERSION "3.12")
+
 project(AsteroidsEngine)
 
-set(BUILD_SHARED_LIBS true)
-unset(BUILD_STATIC_LIBS)
+message(STATUS "VCPKG: ${CMAKE_TOOLCHAIN_FILE}")
 
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/game")
-set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/game/debug")
-set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/game")
+set(BUILD_STATIC_LIBS true)
+unset(BUILD_SHARED_LIBS)
 
 add_subdirectory(deps)
 add_subdirectory(src)

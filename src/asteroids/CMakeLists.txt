@@ -1,4 +1,7 @@
 
+find_package(protobuf CONFIG REQUIRED)
+find_package(GameNetworkingSockets CONFIG REQUIRED)
+
 add_library(AsteroidsEngine STATIC 
 	"includes.hpp" 
 	"engine.hpp" "engine.cpp" 
@@ -32,5 +35,3 @@ target_link_libraries(AsteroidsEngine PUBLIC
 	THST
 	tgui
     nlohmann_json::nlohmann_json)
-
-
